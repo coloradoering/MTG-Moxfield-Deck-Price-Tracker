@@ -27,7 +27,25 @@
         h1 { color: #38bdf8; font-size: 1.5rem; font-weight: 600; }
         .subtitle { color: #64748b; font-size: 0.85rem; }
 
-        .toolbar { display: flex; gap: 8px; }
+        .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .track-user { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+            background: #0f172a; border: 1px solid #1e293b; border-radius: 10px;
+            padding: 12px 14px; margin-bottom: 16px; }
+        .track-user label { font-size: 0.75rem; color: #64748b; text-transform: uppercase;
+            letter-spacing: 0.04em; }
+        .track-user input { background: #0b1220; border: 1px solid #334155; color: #e2e8f0;
+            padding: 8px 12px; border-radius: 8px; font-size: 0.85rem;
+            font-family: inherit; flex: 0 1 240px; }
+        .track-user input::placeholder { color: #475569; }
+        .track-user input:focus { outline: none; border-color: #38bdf8; }
+        .track-status { font-size: 0.82rem; color: #94a3b8; }
+        .track-status.error { color: #f43f5e; }
+        .track-status.success { color: #10b981; }
+        .vendor-label { font-size: 0.75rem; color: #64748b; text-transform: uppercase;
+            letter-spacing: 0.04em; margin-right: -2px; }
+        .vendor-select { padding-right: 28px; appearance: none; -webkit-appearance: none;
+            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%2394a3b8'/></svg>");
+            background-repeat: no-repeat; background-position: right 10px center; }
         .btn {
             background: #1e293b;
             color: #e2e8f0;
@@ -245,10 +263,22 @@
                 <p class="subtitle" id="lastUpdated"></p>
             </div>
             <div class="toolbar">
+                <label class="vendor-label" for="vendorSelect">Price source</label>
+                <select class="btn vendor-select" id="vendorSelect" onchange="onVendorChange()">
+                    <option value="tcgplayer">TCGplayer</option>
+                </select>
                 <button class="btn" onclick="toggleAll()" id="toggleAllBtn">Hide All</button>
                 <button class="btn primary" onclick="loadData()">🔄 Refresh</button>
             </div>
         </header>
+
+        <div class="track-user">
+            <label for="usernameInput">Moxfield username</label>
+            <input type="text" id="usernameInput" placeholder="e.g. CorbanMonoxide" autocomplete="off" spellcheck="false">
+            <button class="btn primary" id="trackBtn" onclick="trackUser()">Track</button>
+            <button class="btn" id="scrapeBtn" onclick="runScrape()">🕷️ Scrape Now</button>
+            <span class="track-status" id="trackStatus"></span>
+        </div>
 
         <div class="stats" id="stats"></div>
 
@@ -288,16 +318,115 @@
         let allHistory = [];
         let allDecks = [];
         let hiddenDecks = new Set();
+        let vendors = [];
+        let vendor = localStorage.getItem('vendor') || 'tcgplayer';
+
+        function onVendorChange() {
+            vendor = document.getElementById('vendorSelect').value;
+            localStorage.setItem('vendor', vendor);
+            loadData();
+        }
+
+        async function loadVendors() {
+            try {
+                const res = await fetch('/api/vendors');
+                const body = await res.json();
+                vendors = body.vendors;
+                const sel = document.getElementById('vendorSelect');
+                const known = vendors.some((v) => v.key === vendor);
+                if (!known) vendor = body.default;
+                sel.innerHTML = vendors
+                    .map((v) => `<option value="${v.key}">${v.label}</option>`)
+                    .join('');
+                sel.value = vendor;
+            } catch (err) {
+                console.error('Error loading vendors:', err);
+            }
+        }
+
+        function setStatus(msg, cls) {
+            const el = document.getElementById('trackStatus');
+            el.textContent = msg || '';
+            el.className = 'track-status' + (cls ? ' ' + cls : '');
+        }
+
+        function busy(on) {
+            document.getElementById('trackBtn').disabled = on;
+            document.getElementById('scrapeBtn').disabled = on;
+        }
+
+        async function trackUser() {
+            const input = document.getElementById('usernameInput');
+            const username = input.value.trim();
+            if (!username) {
+                setStatus('Enter a Moxfield username.', 'error');
+                return;
+            }
+
+            busy(true);
+            setStatus(`Looking up ${username}...`);
+            try {
+                const res = await fetch('/api/user', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username }),
+                });
+                const body = await res.json();
+                if (!res.ok) throw new Error(body.error || 'Request failed');
+
+                localStorage.setItem('username', body.user);
+                setStatus(
+                    `Tracking ${body.user} — ${body.decks} deck${body.decks === 1 ? '' : 's'} found. ` +
+                        `Run a scrape to price them.`,
+                    'success'
+                );
+                await loadData();
+            } catch (err) {
+                setStatus(err.message, 'error');
+            } finally {
+                busy(false);
+            }
+        }
+
+        async function runScrape() {
+            busy(true);
+            setStatus('Scraping — this takes a minute...');
+            try {
+                const res = await fetch('/api/scrape', { method: 'POST' });
+                const body = await res.json();
+                if (!res.ok) throw new Error(body.error || 'Scrape failed');
+                setStatus(`Done — ${body.decks ?? '?'} decks priced.`, 'success');
+                await loadData();
+            } catch (err) {
+                setStatus(err.message, 'error');
+            } finally {
+                busy(false);
+            }
+        }
+
+        async function loadUser() {
+            try {
+                const res = await fetch('/api/user');
+                const body = await res.json();
+                if (body.user) {
+                    document.getElementById('usernameInput').value = body.user;
+                }
+            } catch (err) {
+                console.error('Error loading user:', err);
+            }
+        }
 
         async function loadData() {
             try {
                 const [historyRes, decksRes] = await Promise.all([
-                    fetch('/api/history'),
-                    fetch('/api/decks')
+                    fetch(`/api/history?vendor=${encodeURIComponent(vendor)}`),
+                    fetch(`/api/decks?vendor=${encodeURIComponent(vendor)}`)
                 ]);
 
                 allHistory = await historyRes.json();
-                allDecks = await decksRes.json();
+                const deckBody = await decksRes.json();
+                allDecks = Array.isArray(deckBody) ? deckBody : deckBody.decks || [];
+                const deckSource = deckBody.source || 'registry';
 
                 if (allHistory.length === 0) {
                     document.getElementById('lastUpdated').textContent = 'No data yet. Run the scraper first.';
@@ -307,7 +436,12 @@
                 const latest = allHistory[allHistory.length - 1];
                 const previous = allHistory.length > 1 ? allHistory[allHistory.length - 2] : null;
 
-                document.getElementById('lastUpdated').textContent = `Last updated: ${latest.date}`;
+                const label = vendors.find((v) => v.key === vendor)?.label || vendor;
+                let note = `Last updated: ${latest.date} — priced via ${label}`;
+                if (deckSource === 'price_logs') {
+                    note += ' · deck list from last snapshot (run the scraper to build the registry)';
+                }
+                document.getElementById('lastUpdated').textContent = note;
 
                 renderStats(latest, previous);
                 renderDeckCards(latest, previous);
@@ -471,8 +605,17 @@
 
         function renderChart() {
             const dates = allHistory.map(h => h.date);
+
+            // Union of every deck across all snapshots, so a deck that was removed
+            // from the collection still shows its history rather than vanishing.
             const latest = allHistory[allHistory.length - 1];
-            const deckNames = Object.keys(latest.prices).filter(n => latest.prices[n] > 0);
+            const nameSet = new Set();
+            for (const snap of allHistory) {
+                for (const [name, v] of Object.entries(snap.prices || {})) {
+                    if (v > 0) nameSet.add(name);
+                }
+            }
+            const deckNames = [...nameSet];
 
             const fallbackColors = [
                 '#f43f5e', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6',
@@ -488,7 +631,7 @@
                     const color = info ? info.color : fallbackColors[i % fallbackColors.length];
                     return {
                         label: name,
-                        data: allHistory.map(h => h.prices[name] || null),
+                        data: allHistory.map(h => h.prices[name] ?? null),
                         borderColor: color,
                         backgroundColor: color + '20',
                         tension: 0.15,
@@ -551,7 +694,8 @@
             });
         }
 
-        loadData();
+        loadUser();
+        loadVendors().then(loadData);
     </script>
 </body>
 </html>

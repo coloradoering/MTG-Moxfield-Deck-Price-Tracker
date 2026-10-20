@@ -1,9 +1,16 @@
 {
   "name": "moxfield-price-tracker",
-  "version": "1.0.0",
+  "version": "2.0.0",
+  "description": "Track the market value of every deck in a Moxfield collection over time",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "scrape": "node run.js"
+    "scrape": "node run.js",
+    "scrub": "node scrub.js",
+    "seed": "node buh.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "express": "^4.18.2",
