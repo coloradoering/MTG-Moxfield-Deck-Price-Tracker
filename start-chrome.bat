@@ -8,5 +8,5 @@ start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" ^
   --user-data-dir="%USERPROFILE%\chrome-debug-profile"
 
 echo Chrome started! Please log into Moxfield in the browser window.
-echo Then run: docker compose up tracker
+echo Then run: npm run scrape
 pause

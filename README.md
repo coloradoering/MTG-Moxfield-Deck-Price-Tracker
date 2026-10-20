@@ -46,6 +46,7 @@ Deck names are joined against the snapshot `prices` keys to render cards and cha
 | `buh.js` | Seed script — inserts **fake** historical data so the dashboard has something to render. |
 | `scrub.js` | Deletes all snapshots for the current date, so you can re-run a scrape cleanly. |
 | `start-chrome.bat` | Windows helper that launches Chrome with remote debugging on port `9222`. |
+| `moxfield_history.json`, `moxfield_prices_2026-08-11.csv` | Leftover data exports. Nothing in the app reads them. |
 
 ---
 
@@ -62,15 +63,25 @@ Deck names are joined against the snapshot `prices` keys to render cards and cha
 
 ### 1. Start MongoDB
 
-Use the bundled compose file, or any local Mongo instance:
+Install MongoDB natively and make sure it is running on `localhost:27017`.
+
+- **Windows:** [MongoDB Community Server MSI](https://www.mongodb.com/try/download/community) (installs as a Windows service), or `winget install MongoDB.Server`
+- **Debian/Ubuntu:** `sudo apt install mongodb-org && sudo systemctl enable --now mongod`
+- **macOS:** `brew tap mongodb/brew && brew install mongodb-community`
+
+Verify it is reachable:
 
 ```bash
-docker compose up -d mongo
+mongosh --eval "db.runCommand({ping:1})"
 ```
+
+Data lives at the server's configured `dbPath` — typically `/var/lib/mongodb` on a Linux package install, or `C:\Program Files\MongoDB\Server\<version>\data` on Windows. The database name is `moxfield_tracker`.
 
 ### 2. Launch Chrome with remote debugging
 
-The scraper **attaches to an existing Chrome** rather than launching its own. This is deliberate — Moxfield throttles/blocklists headless automation, and a real browser profile gets through.
+The scraper **attaches to an existing Chrome** rather than launching its own. This is deliberate — Moxfield blocks headless automation, and a real browser profile gets through. The login session lives in the profile directory, so you log in once and later runs reuse it.
+
+This is also **why the project has no Docker setup**. A container cannot reach the host's Chrome, and running Chrome inside one reintroduces the headless fingerprint the approach exists to avoid. The scraper, database, and dashboard are meant to run natively on the same machine.
 
 **Windows:** run `start-chrome.bat`
 
@@ -144,7 +155,7 @@ Most things are hardcoded and will need editing to reuse this for your own colle
 
 The `name` is the join key across the database, the chart legend, and the UI. Renaming a deck starts it as a brand-new series; historical snapshots keep the old name.
 
-**MongoDB connection** — `run.js` honours `MONGO_URL`; `server.js` and the helper scripts do **not**. Set it in all four places (`run.js`, `server.js`, `buh.js`, `scrub.js`) if you're not on `localhost`.
+**Config precedence:** only `run.js` reads `MONGO_URL` from the environment. `server.js`, `buh.js`, and `scrub.js` hardcode `mongodb://localhost:27017` — see *Known rough edges*.
 
 **Port** — `3000`, hardcoded in `server.js`.
 
@@ -169,7 +180,8 @@ Personal project. No tests, no CI, no README until now. `node_modules/` is commi
 Known rough edges:
 
 - `tracker.py` and `decks.js` disagree on which decks exist — Python tracks 10, JS tracks 14. `tracker.py` also writes to Google Sheets rather than MongoDB, so the two paths don't share storage.
-- `buh.js` is named as if it were a utility; it's a destructive seed script.
+- `server.js` hardcodes the Mongo URL while `run.js` reads `MONGO_URL`. Moving the database off `localhost` requires editing both.
+- `buh.js` is named as if it were a utility; it's a destructive seed script that clears `price_logs`.
 - `GET /api/latest` in `server.js` is implemented but never called — the UI derives the latest snapshot client-side from `/api/history`.
 - `run.js` carries a vestigial `page` variable that is assigned and then nulled each iteration; the real work uses a separately acquired `freshPage`.
 
