@@ -69,7 +69,9 @@ async function apiGetInPage(page, path) {
 
   if (result.threw) {
     throw new Error(
-      `fetch ${result.url} from ${result.origin} failed: ${result.message}`
+      `fetch ${result.url} from ${result.origin} failed: ${result.message} ` +
+        'If this says CORS, the page is on an origin the API does not allow — check ' +
+        'that the tab is on the site itself and not the API host.'
     );
   }
   if (result.notJson) {

@@ -80,10 +80,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /**
  * Ensure a debuggable Chrome is available.
  *
+ * Two cases that used to be conflated:
+ *
+ *  1. The port already answers. Use it — but only after checking that the browser
+ *     behind it actually works, which is what the caller does next.
+ *
+ *  2. The port is dead. Launch with --remote-debugging-port and a dedicated
+ *     profile. This is the case a plain `start chrome.exe` cannot recover from:
+ *     if Chrome is already running for that profile it hands the flags to the
+ *     existing process, ignores them, and exits, so the port never opens. A
+ *     separate profile directory cannot collide that way, and never touches the
+ *     user's normal browsing session.
+ *
  * Returns { status, url, started, pid?, message }, where status is one of
  * 'already-running' | 'started' | 'no-browser' | 'failed'.
  */
-async function ensureChrome({ url = CHROME_URL, log = () => {} } = {}) {
+async function ensureChrome({ url = CHROME_URL, log = () => {}, timeoutMs = 20000 } = {}) {
   if (await isChromeUp(url)) {
     return { status: 'already-running', url, started: false };
   }
@@ -107,15 +119,17 @@ async function ensureChrome({ url = CHROME_URL, log = () => {} } = {}) {
     `--user-data-dir=${PROFILE_DIR}`,
     '--no-first-run',
     '--no-default-browser-check',
+    '--no-startup-window',
   ];
 
-  // Detached + unref so the browser outlives this request. stdio ignored so a
-  // parent that exits does not close the child's pipes.
   const child = spawn(exe, args, { detached: true, stdio: 'ignore' });
   child.unref();
 
-  // Poll rather than racing the launch.
-  for (let i = 0; i < 40; i += 1) {
+  // Exit codes here are not meaningful: Chrome forks and the launcher returns
+  // immediately, so a zero exit says nothing about whether the port opened.
+  // Wait on the port, not the process.
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     await sleep(250);
     if (await isChromeUp(url)) {
       return { status: 'started', url, started: true, pid: child.pid };
@@ -126,7 +140,11 @@ async function ensureChrome({ url = CHROME_URL, log = () => {} } = {}) {
     status: 'failed',
     url,
     started: false,
-    message: `Started Chrome but nothing answered on ${url} within 10s. Check the port is not blocked.`,
+    message:
+      `Started Chrome but nothing answered on ${url} within ${Math.round(timeoutMs / 1000)}s. ` +
+      'If Chrome is already running for that profile it will ignore the debugging flag — ' +
+      'quit that instance, or run start-chrome.bat. Setting CHROME_PROFILE_DIR to an unused ' +
+      'directory also avoids the clash.',
   };
 }
 
