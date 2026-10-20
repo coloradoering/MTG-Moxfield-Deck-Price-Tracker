@@ -1,2 +1,8 @@
 credentials.json 
 *.json.bak 
+
+# Database dumps — real price history belongs in the DB, not a public repo.
+*.dump.gz
+*.dump
+mongodump/
+backup/
