@@ -1,6 +1,5 @@
 @echo off
 echo Starting Chrome with remote debugging...
-taskkill /F /IM chrome.exe 2>nul
 timeout /t 2 /nobreak >nul
 
 start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" ^
