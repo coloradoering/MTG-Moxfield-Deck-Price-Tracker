@@ -26,18 +26,59 @@ const UNFILTERED_SENTINEL = 10000;
 /**
  * Run a GET against the Moxfield API inside the page's own context.
  * The page must already be on a moxfield.com origin so cookies apply.
+ *
+ * A failing fetch throws inside the page, which puppeteer surfaces as a generic
+ * "failed to fetch" with no status and no URL. That is useless to debug, so the
+ * page catches the error itself and reports the origin, the host actually
+ * reached, and any underlying message.
  */
 async function apiGetInPage(page, path) {
-  const result = await page.evaluate(async (url) => {
-    const res = await fetch(url, { credentials: 'include' });
-    if (!res.ok) return { ok: false, status: res.status, body: null };
-    return { ok: true, status: res.status, body: await res.json() };
-  }, `${API_BASE}${path}`);
+  const url = `${API_BASE}${path}`;
+  const result = await page.evaluate(async (target) => {
+    try {
+      const res = await fetch(target, { credentials: 'include' });
+      if (!res.ok) {
+        return { ok: false, status: res.status, origin: location.origin, url: target };
+      }
+      const text = await res.text();
+      // A Cloudflare or notice page comes back 200 with HTML, not JSON.
+      try {
+        return { ok: true, body: JSON.parse(text), origin: location.origin, url: target };
+      } catch {
+        return {
+          ok: false,
+          status: res.status,
+          notJson: true,
+          snippet: text.slice(0, 200),
+          origin: location.origin,
+          url: target,
+        };
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        threw: true,
+        message: String((err && err.message) || err),
+        origin: location.origin,
+        url: target,
+      };
+    }
+  }, url);
 
-  if (!result.ok) {
-    throw new Error(`${path} -> HTTP ${result.status}`);
+  if (result.ok) return result.body;
+
+  if (result.threw) {
+    throw new Error(
+      `fetch ${result.url} from ${result.origin} failed: ${result.message}`
+    );
   }
-  return result.body;
+  if (result.notJson) {
+    throw new Error(
+      `${path} -> HTTP ${result.status} but the body was not JSON ` +
+        `(page was on ${result.origin}). Body starts: ${JSON.stringify(result.snippet)}`
+    );
+  }
+  throw new Error(`${path} -> HTTP ${result.status} (page was on ${result.origin})`);
 }
 
 /**
