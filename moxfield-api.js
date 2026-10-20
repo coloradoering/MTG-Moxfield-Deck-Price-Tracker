@@ -99,24 +99,71 @@ async function fetchDeck(page, publicId) {
 }
 
 /**
- * Total market value, computed from per-card prices.
+ * Vendors Moxfield prices against, keyed to the field on each card's `prices`.
  *
- * Mirrors the deck page's own settings: basic lands excluded, commanders and
- * signature spells included. Non-foil entries use `prices.usd`; foil entries use
- * `prices.usd_foil`.
- *
- * Cross-checked against real history: this reports $89.70 for
- * "villain kindred", whose recorded value on the chart is $86.61 — within
- * normal card-price drift.
+ * These are the keys of a deck's `affiliates` map (`ck`, `tcg`, `csi`, `scg`,
+ * `ct`, `ch`, `cm`), narrowed to the ones that actually carry a price field.
+ * `usd` is TCGplayer; `ck` is Card Kingdom. Verified by exact match: summing
+ * `ck` across villain kindred's non-basic mainboard + commanders gives $152.45,
+ * which is the number the deck page renders when Card Kingdom is selected.
  */
-function deckValue(deck) {
+const VENDORS = {
+  tcgplayer: { field: 'usd', label: 'TCGplayer' },
+  cardkingdom: { field: 'ck', label: 'Card Kingdom' },
+  coolstuff: { field: 'csi', label: 'CoolStuffInc' },
+  starcity: { field: 'scg', label: 'Star City Games' },
+  manapool: { field: 'mp', label: 'ManaPool' },
+  cardtrader: { field: 'ct', label: 'CardTrader' },
+  cardmarket: { field: 'eur', label: 'Cardmarket' },
+};
+
+const DEFAULT_VENDOR = 'tcgplayer';
+
+/** Resolve a vendor key or alias to a canonical key, or throw. */
+function resolveVendor(name) {
+  if (!name) return DEFAULT_VENDOR;
+  const key = String(name).toLowerCase().replace(/[^a-z]/g, '');
+  if (VENDORS[key]) return key;
+  const aliases = {
+    tcg: 'tcgplayer',
+    usd: 'tcgplayer',
+    ck: 'cardkingdom',
+    csi: 'coolstuff',
+    scg: 'starcity',
+    mp: 'manapool',
+    ct: 'cardtrader',
+    cm: 'cardmarket',
+    eur: 'cardmarket',
+  };
+  if (aliases[key]) return aliases[key];
+  throw new Error(
+    `Unknown vendor "${name}". Choose one of: ${Object.keys(VENDORS).join(', ')}`
+  );
+}
+
+/**
+ * Total market value for one vendor, computed from per-card prices.
+ *
+ * Reproduces the deck page's own total rather than reading it off the DOM. The
+ * page renders one vendor at a time inside `#shoppingcart`, so scraping its text
+ * recorded whichever storefront the browsing session happened to have selected
+ * (Card Kingdom by default) — which is why historical snapshots show CK prices.
+ *
+ * Board coverage matches Moxfield: mainboard + commanders + signature spells,
+ * basic lands excluded.
+ */
+function deckValue(deck, vendor = DEFAULT_VENDOR) {
+  const key = resolveVendor(vendor);
+  const field = VENDORS[key].field;
+
   const sumBoard = (board) => {
     let total = 0;
     for (const entry of Object.values(board || {})) {
       const card = entry.card || {};
-      if (card.isBasicLand) continue;
+      if (card.isBasicLand || card.isBasic) continue;
       const prices = card.prices || {};
-      const raw = entry.isFoil ? prices.usd_foil : prices.usd;
+      const foilField = `${field}_foil`;
+      const raw = entry.isFoil && prices[foilField] != null ? prices[foilField] : prices[field];
       const value = Number.parseFloat(raw);
       if (Number.isFinite(value)) total += value * (entry.quantity || 1);
     }
@@ -129,6 +176,15 @@ function deckValue(deck) {
     sumBoard(deck.signatureSpells);
 
   return Math.round(total * 100) / 100;
+}
+
+/** Every supported vendor's total for one deck, for comparison and storage. */
+function allVendorValues(deck) {
+  const out = {};
+  for (const key of Object.keys(VENDORS)) {
+    out[key] = deckValue(deck, key);
+  }
+  return out;
 }
 
 /**
@@ -185,9 +241,13 @@ async function commanderImages(page, deck) {
 module.exports = {
   API_BASE,
   UNFILTERED_SENTINEL,
+  VENDORS,
+  DEFAULT_VENDOR,
   apiGetInPage,
   fetchUserDecks,
   fetchDeck,
   deckValue,
+  allVendorValues,
+  resolveVendor,
   commanderImages,
 };

@@ -27,7 +27,10 @@
         h1 { color: #38bdf8; font-size: 1.5rem; font-weight: 600; }
         .subtitle { color: #64748b; font-size: 0.85rem; }
 
-        .toolbar { display: flex; gap: 8px; }
+        .toolbar { display: flex; gap: 8px; align-items: center; }
+        .vendor-select { padding-right: 28px; appearance: none; -webkit-appearance: none;
+            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%2394a3b8'/></svg>");
+            background-repeat: no-repeat; background-position: right 10px center; }
         .btn {
             background: #1e293b;
             color: #e2e8f0;
@@ -245,6 +248,9 @@
                 <p class="subtitle" id="lastUpdated"></p>
             </div>
             <div class="toolbar">
+                <select class="btn vendor-select" id="vendorSelect" onchange="onVendorChange()" title="Price source">
+                    <option value="tcgplayer">TCGplayer</option>
+                </select>
                 <button class="btn" onclick="toggleAll()" id="toggleAllBtn">Hide All</button>
                 <button class="btn primary" onclick="loadData()">🔄 Refresh</button>
             </div>
@@ -288,11 +294,36 @@
         let allHistory = [];
         let allDecks = [];
         let hiddenDecks = new Set();
+        let vendors = [];
+        let vendor = localStorage.getItem('vendor') || 'tcgplayer';
+
+        function onVendorChange() {
+            vendor = document.getElementById('vendorSelect').value;
+            localStorage.setItem('vendor', vendor);
+            loadData();
+        }
+
+        async function loadVendors() {
+            try {
+                const res = await fetch('/api/vendors');
+                const body = await res.json();
+                vendors = body.vendors;
+                const sel = document.getElementById('vendorSelect');
+                const known = vendors.some((v) => v.key === vendor);
+                if (!known) vendor = body.default;
+                sel.innerHTML = vendors
+                    .map((v) => `<option value="${v.key}">${v.label}</option>`)
+                    .join('');
+                sel.value = vendor;
+            } catch (err) {
+                console.error('Error loading vendors:', err);
+            }
+        }
 
         async function loadData() {
             try {
                 const [historyRes, decksRes] = await Promise.all([
-                    fetch('/api/history'),
+                    fetch(`/api/history?vendor=${encodeURIComponent(vendor)}`),
                     fetch('/api/decks')
                 ]);
 
@@ -307,7 +338,9 @@
                 const latest = allHistory[allHistory.length - 1];
                 const previous = allHistory.length > 1 ? allHistory[allHistory.length - 2] : null;
 
-                document.getElementById('lastUpdated').textContent = `Last updated: ${latest.date}`;
+                const label = vendors.find((v) => v.key === vendor)?.label || vendor;
+                document.getElementById('lastUpdated').textContent =
+                    `Last updated: ${latest.date} — priced via ${label}`;
 
                 renderStats(latest, previous);
                 renderDeckCards(latest, previous);
@@ -560,7 +593,7 @@
             });
         }
 
-        loadData();
+        loadVendors().then(loadData);
     </script>
 </body>
 </html>
