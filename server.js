@@ -1,12 +1,14 @@
 const express = require('express');
 const { MongoClient } = require('mongodb');
 const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const { spawn } = require('child_process');
 const { scrapePrices } = require('./scraper');
 
 const app = express();
 const PORT = 3000;
-const MONGO_URL = 'mongodb://localhost:27017';
+const MONGO_URL = process.env.MONGO_URL || 'mongodb://localhost:27017';
 const DB_NAME = 'moxfield_tracker';
 
 app.use(express.static('public'));
@@ -18,6 +20,12 @@ const COLORS = [
     '#14b8a6', '#f97316', '#a855f7', '#22c55e', '#e11d48',
     '#0ea5e9', '#d946ef', '#ef4444'
 ];
+
+function detectSource(url) {
+    if (/moxfield\.com\/decks\//i.test(url)) return 'moxfield';
+    if (/archidekt\.com\/decks\//i.test(url)) return 'archidekt';
+    return null;
+}
 
 async function withDb(fn) {
     const client = new MongoClient(MONGO_URL);
@@ -46,6 +54,7 @@ app.get('/api/decks', async (req, res) => {
         const list = decks.map((d, i) => ({
             name: d.name,
             url: d.url,
+            source: d.source || detectSource(d.url) || 'moxfield',
             color: COLORS[i % COLORS.length],
             image: latest?.images?.[d.name] || null
         }));
@@ -57,15 +66,23 @@ app.get('/api/decks', async (req, res) => {
 app.post('/api/decks', async (req, res) => {
     const { name, url } = req.body || {};
     if (!name || !url) return res.status(400).json({ error: 'Name and URL are required.' });
-    if (!/moxfield\.com\/decks\//.test(url)) return res.status(400).json({ error: 'URL must be a Moxfield deck link.' });
+
+    const source = detectSource(url);
+    if (!source) {
+        return res.status(400).json({ error: 'URL must be a Moxfield or Archidekt deck link.' });
+    }
 
     try {
         await withDb(async db => {
             const existing = await db.collection('decks').findOne({ name });
             if (existing) throw new Error(`A deck named "${name}" already exists.`);
-            await db.collection('decks').insertOne({ name: name.trim(), url: url.trim() });
+            await db.collection('decks').insertOne({
+                name: name.trim(),
+                url: url.trim(),
+                source
+            });
         });
-        res.json({ ok: true });
+        res.json({ ok: true, source });
     } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
@@ -121,7 +138,7 @@ function launchChrome() {
     console.log(`🚀 Launching Chrome from ${chrome}`);
     const child = spawn(chrome, [
         '--remote-debugging-port=9222',
-        '--user-data-dir=' + require('path').join(require('os').homedir(), 'chrome-debug-profile')
+        '--user-data-dir=' + path.join(os.homedir(), 'chrome-debug-profile')
     ], {
         detached: true,
         stdio: 'ignore'
