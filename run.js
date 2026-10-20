@@ -81,16 +81,21 @@ function localTimestamp(d = new Date()) {
   }
 
   const pages = await browser.pages();
-  // Never reuse a tab sitting on the API host — the fetch has to run from the
-  // site origin, or it is cross-origin and answers with the public-use notice.
-  let page = pages.find(
-    (p) => p.url().includes('moxfield.com') && !p.url().includes('api2.moxfield.com')
-  );
+  // Match the exact site origin. A substring test accepts any Moxfield host —
+  // including api2 — and a page on the wrong origin gets its fetch rejected by
+  // CORS, which surfaces as an unhelpful "failed to fetch".
+  let page = pages.find((p) => {
+    try {
+      return new URL(p.url()).host === 'www.moxfield.com';
+    } catch {
+      return false;
+    }
+  });
 
   if (!page) {
     page = await browser.newPage();
     console.log('Opening moxfield.com to establish session...');
-    await page.goto('https://moxfield.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto('https://www.moxfield.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
   } else {
     console.log(`Reusing existing tab: ${page.url()}`);
   }

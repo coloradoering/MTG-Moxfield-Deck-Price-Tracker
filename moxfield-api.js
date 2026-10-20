@@ -288,7 +288,7 @@ const CHROME_URL_DEFAULT = process.env.CHROME_URL || 'http://localhost:9222';
  * helpers need same-origin fetch, so we cannot just call the API from Node),
  * and disconnects without closing the browser.
  */
-const SITE_ORIGIN = 'https://moxfield.com';
+const SITE_ORIGIN = 'https://www.moxfield.com';
 
 /**
  * Find a page already on a moxfield.com origin, or open one.
@@ -301,9 +301,15 @@ const SITE_ORIGIN = 'https://moxfield.com';
  */
 async function getSitePage(browser) {
   const pages = await browser.pages();
-  const existing = pages.find(
-    (p) => p.url().includes('moxfield.com') && !p.url().includes('api2.moxfield.com')
-  );
+  // Exact origin, not a substring: a tab on any other Moxfield host (api2, or a
+  // bare moxfield.com that CORS does not allow) would make the fetch fail.
+  const existing = pages.find((p) => {
+    try {
+      return new URL(p.url()).origin === SITE_ORIGIN;
+    } catch {
+      return false;
+    }
+  });
   if (existing) return existing;
 
   const page = await browser.newPage();
