@@ -1,6 +1,8 @@
 const express = require('express');
 const { MongoClient } = require('mongodb');
-const decks = require('./decks');
+const fs = require('fs');
+const { spawn } = require('child_process');
+const { scrapePrices } = require('./scraper');
 
 const app = express();
 const PORT = 3000;
@@ -8,63 +10,126 @@ const MONGO_URL = 'mongodb://localhost:27017';
 const DB_NAME = 'moxfield_tracker';
 
 app.use(express.static('public'));
+app.use(express.json());
 
+const COLORS = [
+    '#f43f5e', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6',
+    '#ec4899', '#06b6d4', '#84cc16', '#eab308', '#6366f1',
+    '#14b8a6', '#f97316', '#a855f7', '#22c55e', '#e11d48',
+    '#0ea5e9', '#d946ef', '#ef4444'
+];
+
+async function withDb(fn) {
+    const client = new MongoClient(MONGO_URL);
+    await client.connect();
+    try { return await fn(client.db(DB_NAME)); }
+    finally { await client.close(); }
+}
+
+// ---- history ----
 app.get('/api/history', async (req, res) => {
     try {
-        const client = new MongoClient(MONGO_URL);
-        await client.connect();
-        const db = client.db(DB_NAME);
-        const history = await db.collection('price_logs').find().sort({ date: 1 }).toArray();
-        await client.close();
+        const history = await withDb(db => db.collection('price_logs').find().sort({ date: 1 }).toArray());
         res.json(history);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/latest', async (req, res) => {
-    try {
-        const client = new MongoClient(MONGO_URL);
-        await client.connect();
-        const db = client.db(DB_NAME);
-        const latest = await db.collection('price_logs').findOne({}, { sort: { date: -1 } });
-        await client.close();
-        res.json(latest);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
+// ---- decks ----
 app.get('/api/decks', async (req, res) => {
     try {
-        const client = new MongoClient(MONGO_URL);
-        await client.connect();
-        const db = client.db(DB_NAME);
-        const latest = await db.collection('price_logs').findOne({}, { sort: { date: -1 } });
-        await client.close();
+        const [latest, decks] = await withDb(async db => {
+            const latest = await db.collection('price_logs').findOne({}, { sort: { date: -1 } });
+            const decks = await db.collection('decks').find().sort({ _id: 1 }).toArray();
+            return [latest, decks];
+        });
 
-        if (!latest) return res.json([]);
-
-        const colors = [
-            '#f43f5e', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6',
-            '#ec4899', '#06b6d4', '#84cc16', '#eab308', '#6366f1',
-            '#14b8a6', '#f97316', '#a855f7', '#22c55e', '#e11d48',
-            '#0ea5e9', '#d946ef', '#ef4444'
-        ];
-
-        const deckList = decks.map((deck, i) => ({
-            name: deck.name,
-            color: colors[i % colors.length],
-            url: deck.url,
-            image: latest.images?.[deck.name] || null
+        const list = decks.map((d, i) => ({
+            name: d.name,
+            url: d.url,
+            color: COLORS[i % COLORS.length],
+            image: latest?.images?.[d.name] || null
         }));
 
-        res.json(deckList);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+        res.json(list);
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.post('/api/decks', async (req, res) => {
+    const { name, url } = req.body || {};
+    if (!name || !url) return res.status(400).json({ error: 'Name and URL are required.' });
+    if (!/moxfield\.com\/decks\//.test(url)) return res.status(400).json({ error: 'URL must be a Moxfield deck link.' });
+
+    try {
+        await withDb(async db => {
+            const existing = await db.collection('decks').findOne({ name });
+            if (existing) throw new Error(`A deck named "${name}" already exists.`);
+            await db.collection('decks').insertOne({ name: name.trim(), url: url.trim() });
+        });
+        res.json({ ok: true });
+    } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.delete('/api/decks/:name', async (req, res) => {
+    try {
+        const name = decodeURIComponent(req.params.name);
+        await withDb(db => db.collection('decks').deleteOne({ name }));
+        res.json({ ok: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- scrape ----
+let scrapeRunning = false;
+app.post('/api/scrape', async (req, res) => {
+    if (scrapeRunning) return res.status(409).json({ error: 'Scrape already in progress.' });
+    scrapeRunning = true;
+    try {
+        const data = await scrapePrices();
+        res.json({ ok: true, date: data.date, decks: Object.keys(data.prices).length });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    } finally {
+        scrapeRunning = false;
+    }
+});
+app.get('/api/scrape/status', (req, res) => res.json({ running: scrapeRunning }));
+
+// ---- scrub ----
+app.post('/api/scrub', async (req, res) => {
+    const { date } = req.body || {};
+    if (!date || !/^\d{4}-\d{2}-\d{2}/.test(date)) {
+        return res.status(400).json({ error: 'Invalid date. Use YYYY-MM-DD.' });
+    }
+    try {
+        const result = await withDb(db => db.collection('price_logs').deleteMany({ date: { $regex: `^${date}` } }));
+        res.json({ ok: true, deleted: result.deletedCount });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- launch ----
+function launchChrome() {
+    const candidates = [
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        '/usr/bin/google-chrome'
+    ];
+    const chrome = candidates.find(p => fs.existsSync(p));
+    if (!chrome) {
+        console.warn('⚠️  Chrome not found. Launch manually with --remote-debugging-port=9222');
+        return;
+    }
+    console.log(`🚀 Launching Chrome from ${chrome}`);
+    const child = spawn(chrome, [
+        '--remote-debugging-port=9222',
+        '--user-data-dir=' + require('path').join(require('os').homedir(), 'chrome-debug-profile')
+    ], {
+        detached: true,
+        stdio: 'ignore'
+    });
+    child.unref();
+}
+
 app.listen(PORT, () => {
-    console.log(`📊 Dashboard running at http://localhost:${PORT}`);
+    console.log(`📊 Dashboard → http://localhost:${PORT}`);
+    launchChrome();
 });

@@ -38,9 +38,49 @@
             cursor: pointer;
             transition: all 0.15s;
         }
-        .btn:hover { background: #334155; border-color: #475569; }
+        .btn:hover:not(:disabled) { background: #334155; border-color: #475569; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .btn.primary { background: #38bdf8; color: #0b1220; border-color: #38bdf8; font-weight: 600; }
-        .btn.primary:hover { background: #7dd3fc; }
+        .btn.primary:hover:not(:disabled) { background: #7dd3fc; }
+        .btn.danger { background: #7f1d1d; border-color: #991b1b; }
+        .btn.danger:hover:not(:disabled) { background: #991b1b; }
+
+        .controls-card {
+            background: #131c2e;
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid #1e293b;
+            margin-bottom: 24px;
+        }
+        .controls-card h2 { color: #e2e8f0; margin-bottom: 14px; font-size: 1rem; font-weight: 600; }
+        .control-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 12px;
+            align-items: center;
+        }
+        .control-row:last-child { margin-bottom: 0; }
+        .control-row input {
+            background: #0b1220;
+            border: 1px solid #334155;
+            color: #e2e8f0;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-family: inherit;
+        }
+        .control-row input::placeholder { color: #475569; }
+        .control-row input:focus { outline: none; border-color: #38bdf8; }
+        .control-row input[name="name"] { flex: 1; min-width: 160px; }
+        .control-row input[name="url"] { flex: 2; min-width: 280px; }
+        .control-status {
+            font-size: 0.85rem;
+            color: #94a3b8;
+            min-height: 1.2em;
+        }
+        .control-status.error { color: #f43f5e; }
+        .control-status.success { color: #10b981; }
 
         .stats {
             display: grid;
@@ -104,46 +144,60 @@
             z-index: 5;
         }
 
-        .deck-image-row {
-    position: relative;
-    margin-bottom: 10px;
-    width: 100%;
-    padding-bottom: 100%;
-}
-.deck-image-row img {
-    position: absolute;
-    top: 4%;
-    left: 15%;
-    width: 60%;
-    aspect-ratio: 488 / 680;
-    object-fit: contain;
-    border-radius: 6px;
-    background: #0b1220;
-    transition: transform 0.2s, z-index 0s;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-    z-index: 1;
-}
-.deck-image-row img:nth-child(2) {
-    left: 25%;
-    top: 12%;
-    z-index: 0;
-}
-.deck-image-row img:nth-child(3) {
-    left: 35%;
-    top: 20%;
-    z-index: -1;
-}
-.deck-image-row img:hover {
-    z-index: 10;
-    transform: scale(1.35);
-}
+        .deck-delete {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            background: #7f1d1d;
+            color: #fff;
+            border: none;
+            width: 24px;
+            height: 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            z-index: 6;
+            opacity: 0;
+            transition: opacity 0.15s;
+        }
+        .deck-card:hover .deck-delete { opacity: 1; }
+        .deck-delete:hover { background: #b91c1c; }
 
-.deck-name {
-    font-size: 1rem;
-    color: #94a3b8;
-    margin-bottom: 6px;
-    word-break: break-word;
-}
+        .deck-image-row {
+            position: relative;
+            margin-bottom: 10px;
+            width: 100%;
+            padding-bottom: 100%;
+        }
+        .deck-image-row img {
+            position: absolute;
+            top: 4%;
+            left: 15%;
+            width: 60%;
+            aspect-ratio: 488 / 680;
+            object-fit: contain;
+            border-radius: 6px;
+            background: #0b1220;
+            transition: transform 0.2s, z-index 0s;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+            z-index: 1;
+        }
+        .deck-image-row img:nth-child(2) {
+            left: 25%;
+            top: 12%;
+            z-index: 0;
+        }
+        .deck-image-row img:nth-child(3) {
+            left: 35%;
+            top: 20%;
+            z-index: -1;
+        }
+        .deck-image-row img:hover {
+            z-index: 10;
+            transform: scale(1.35);
+        }
+
+        .deck-name { font-size: 1rem; color: #94a3b8; margin-bottom: 6px; word-break: break-word; }
         .deck-price { font-size: 1.4rem; font-weight: 600; color: var(--deck-color); }
         .deck-change { font-size: 0.8rem; margin-top: 4px; }
         .deck-change.positive { color: #10b981; }
@@ -162,7 +216,6 @@
         }
         .preview-btn:hover { background: #334155; color: #e2e8f0; border-color: #475569; }
 
-        /* Modal */
         .modal-overlay {
             display: none;
             position: fixed;
@@ -213,16 +266,8 @@
             margin-left: 12px;
         }
         .modal-close:hover { background: #e11d48; }
-        .modal-body {
-            flex: 1;
-            overflow: hidden;
-        }
-        .modal-body iframe {
-            width: 100%;
-            height: 100%;
-            border: none;
-            display: block;
-        }
+        .modal-body { flex: 1; overflow: hidden; }
+        .modal-body iframe { width: 100%; height: 100%; border: none; display: block; }
         .modal-footer {
             padding: 10px 20px;
             border-top: 1px solid #1e293b;
@@ -250,6 +295,21 @@
             </div>
         </header>
 
+        <div class="controls-card">
+            <h2>⚙️ Controls</h2>
+            <div class="control-row">
+                <button class="btn primary" id="scrapeBtn" onclick="runScrape()">🕷️ Scrape Now</button>
+                <input type="text" id="scrubDate" placeholder="YYYY-MM-DD">
+                <button class="btn danger" onclick="runScrub()">🗑️ Scrub Date</button>
+            </div>
+            <div class="control-row">
+                <input type="text" id="newDeckName" name="name" placeholder="Deck name">
+                <input type="text" id="newDeckUrl" name="url" placeholder="https://moxfield.com/decks/...">
+                <button class="btn" onclick="addDeck()">➕ Add Deck</button>
+            </div>
+            <div class="control-status" id="controlStatus"></div>
+        </div>
+
         <div class="stats" id="stats"></div>
 
         <div class="chart-card">
@@ -261,12 +321,11 @@
 
         <div class="deck-section-header">
             <h2>Deck Breakdown</h2>
-            <span class="hint">Click a card to toggle its line — click Preview to see the deck</span>
+            <span class="hint">Click a card to toggle its line — hover to reveal delete</span>
         </div>
         <div class="deck-grid" id="deckGrid"></div>
     </div>
 
-    <!-- Preview Modal -->
     <div class="modal-overlay" id="previewModal" onclick="if(event.target===this) closePreview()">
         <div class="modal-box">
             <div class="modal-header">
@@ -289,6 +348,12 @@
         let allDecks = [];
         let hiddenDecks = new Set();
 
+        function setStatus(msg, type) {
+            const el = document.getElementById('controlStatus');
+            el.textContent = msg;
+            el.className = 'control-status' + (type ? ' ' + type : '');
+        }
+
         async function loadData() {
             try {
                 const [historyRes, decksRes] = await Promise.all([
@@ -300,7 +365,10 @@
                 allDecks = await decksRes.json();
 
                 if (allHistory.length === 0) {
-                    document.getElementById('lastUpdated').textContent = 'No data yet. Run the scraper first.';
+                    document.getElementById('lastUpdated').textContent = 'No price data yet. Click Scrape Now.';
+                    document.getElementById('stats').innerHTML = '';
+                    document.getElementById('deckGrid').innerHTML = '';
+                    if (chart) { chart.destroy(); chart = null; }
                     return;
                 }
 
@@ -321,7 +389,7 @@
         function renderStats(latest, previous) {
             const prices = Object.entries(latest.prices).filter(([, v]) => v > 0);
             const totalValue = prices.reduce((sum, [, v]) => sum + v, 0);
-            const avgValue = totalValue / prices.length;
+            const avgValue = prices.length ? totalValue / prices.length : 0;
             const mostValuable = [...prices].sort((a, b) => b[1] - a[1])[0];
 
             let changeHtml = '<span style="color:#64748b">—</span>';
@@ -329,7 +397,7 @@
             if (previous) {
                 const prevTotal = Object.values(previous.prices).filter(v => v > 0).reduce((s, v) => s + v, 0);
                 const diff = totalValue - prevTotal;
-                const pct = ((diff / prevTotal) * 100).toFixed(2);
+                const pct = prevTotal ? ((diff / prevTotal) * 100).toFixed(2) : '0.00';
                 const sign = diff >= 0 ? '+' : '';
                 changeClass = diff >= 0 ? 'positive' : 'negative';
                 changeHtml = `${sign}$${diff.toFixed(2)} (${sign}${pct}%)`;
@@ -372,20 +440,31 @@
                 const card = document.createElement('div');
                 card.className = 'deck-card' + (isHidden ? ' hidden-deck' : '');
                 card.style.setProperty('--deck-color', color);
-                card.addEventListener('click', () => toggleDeck(name));
+                card.addEventListener('click', (e) => {
+                    if (e.target.closest('.deck-delete') || e.target.closest('.preview-btn')) return;
+                    toggleDeck(name);
+                });
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'deck-delete';
+                deleteBtn.textContent = '✕';
+                deleteBtn.title = 'Remove deck';
+                deleteBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    deleteDeck(name);
+                });
+                card.appendChild(deleteBtn);
 
                 if (deckInfo && deckInfo.image) {
                     const images = Array.isArray(deckInfo.image) ? deckInfo.image : [deckInfo.image];
                     const imgRow = document.createElement('div');
                     imgRow.className = 'deck-image-row';
-
                     images.forEach(src => {
                         const img = document.createElement('img');
                         img.src = src;
                         img.alt = name;
                         imgRow.appendChild(img);
                     });
-
                     card.appendChild(imgRow);
                 }
 
@@ -427,6 +506,7 @@
 
         function refreshCards() {
             const latest = allHistory[allHistory.length - 1];
+            if (!latest) return;
             const previous = allHistory.length > 1 ? allHistory[allHistory.length - 2] : null;
             renderDeckCards(latest, previous);
         }
@@ -449,7 +529,7 @@
 
         function updateToggleAllBtn() {
             const btn = document.getElementById('toggleAllBtn');
-            btn.textContent = hiddenDecks.size === allDecks.length ? 'Show All' : 'Hide All';
+            btn.textContent = hiddenDecks.size === allDecks.length && allDecks.length > 0 ? 'Show All' : 'Hide All';
         }
 
         function openPreview(name, deckUrl) {
@@ -469,7 +549,92 @@
             if (e.key === 'Escape') closePreview();
         });
 
+        async function runScrape() {
+            const btn = document.getElementById('scrapeBtn');
+            btn.disabled = true;
+            setStatus('Scraping... this can take a minute.');
+            try {
+                const res = await fetch('/api/scrape', { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Scrape failed');
+                setStatus(`✅ Scraped ${data.decks} decks at ${data.date}`, 'success');
+                await loadData();
+            } catch (err) {
+                setStatus(`❌ ${err.message}`, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function runScrub() {
+            const input = document.getElementById('scrubDate');
+            const date = input.value.trim();
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+                setStatus('❌ Enter date as YYYY-MM-DD', 'error');
+                return;
+            }
+            if (!confirm(`Delete all entries for ${date}?`)) return;
+            try {
+                const res = await fetch('/api/scrub', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ date })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Scrub failed');
+                setStatus(`✅ Deleted ${data.deleted} entries for ${date}`, 'success');
+                input.value = '';
+                await loadData();
+            } catch (err) {
+                setStatus(`❌ ${err.message}`, 'error');
+            }
+        }
+
+        async function addDeck() {
+            const nameInput = document.getElementById('newDeckName');
+            const urlInput = document.getElementById('newDeckUrl');
+            const name = nameInput.value.trim();
+            const url = urlInput.value.trim();
+            if (!name || !url) {
+                setStatus('❌ Name and URL required', 'error');
+                return;
+            }
+            try {
+                const res = await fetch('/api/decks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, url })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Add failed');
+                setStatus(`✅ Added "${name}". Click Scrape Now to fetch its price.`, 'success');
+                nameInput.value = '';
+                urlInput.value = '';
+                await loadData();
+            } catch (err) {
+                setStatus(`❌ ${err.message}`, 'error');
+            }
+        }
+
+        async function deleteDeck(name) {
+            if (!confirm(`Remove "${name}" from tracking? Existing price data is kept.`)) return;
+            try {
+                const res = await fetch(`/api/decks/${encodeURIComponent(name)}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Delete failed');
+                setStatus(`✅ Removed "${name}".`, 'success');
+                await loadData();
+            } catch (err) {
+                setStatus(`❌ ${err.message}`, 'error');
+            }
+        }
+
         function renderChart() {
+            if (allHistory.length === 0) {
+                if (chart) { chart.destroy(); chart = null; }
+                return;
+            }
+
             const dates = allHistory.map(h => h.date);
             const latest = allHistory[allHistory.length - 1];
             const deckNames = Object.keys(latest.prices).filter(n => latest.prices[n] > 0);
