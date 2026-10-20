@@ -41,6 +41,9 @@
         .track-status { font-size: 0.82rem; color: #94a3b8; }
         .track-status.error { color: #f43f5e; }
         .track-status.success { color: #10b981; }
+        .btn.ghost { background: transparent; border-color: #1e293b; color: #94a3b8; }
+        .btn.ghost:hover { color: #e2e8f0; border-color: #334155; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .vendor-label { font-size: 0.75rem; color: #64748b; text-transform: uppercase;
             letter-spacing: 0.04em; margin-right: -2px; }
         .vendor-select { padding-right: 28px; appearance: none; -webkit-appearance: none;
@@ -275,8 +278,8 @@
         <div class="track-user">
             <label for="usernameInput">Moxfield username</label>
             <input type="text" id="usernameInput" placeholder="e.g. CorbanMonoxide" autocomplete="off" spellcheck="false">
-            <button class="btn primary" id="trackBtn" onclick="trackUser()">Track</button>
-            <button class="btn" id="scrapeBtn" onclick="runScrape()">🕷️ Scrape Now</button>
+            <button class="btn primary" id="trackBtn" onclick="applyUser()">Track &amp; Price</button>
+            <button class="btn ghost" id="scrapeBtn" onclick="runScrape()" title="Re-price the decks already being tracked">↻ Refresh prices</button>
             <span class="track-status" id="trackStatus"></span>
         </div>
 
@@ -355,7 +358,14 @@
             document.getElementById('scrapeBtn').disabled = on;
         }
 
-        async function trackUser() {
+        /**
+         * One button for the normal case: import the profile's decks and price them.
+         *
+         * If the username is already the tracked one, the expensive scrape is still
+         * worth running (decks may have changed on Moxfield), but a network import
+         * is skipped when the registry already has decks for them.
+         */
+        async function applyUser() {
             const input = document.getElementById('usernameInput');
             const username = input.value.trim();
             if (!username) {
@@ -364,8 +374,8 @@
             }
 
             busy(true);
-            setStatus(`Looking up ${username}...`);
             try {
+                setStatus(`Looking up ${username}...`);
                 const res = await fetch('/api/user', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -373,14 +383,10 @@
                 });
                 const body = await res.json();
                 if (!res.ok) throw new Error(body.error || 'Request failed');
-
                 localStorage.setItem('username', body.user);
-                setStatus(
-                    `Tracking ${body.user} — ${body.decks} deck${body.decks === 1 ? '' : 's'} found. ` +
-                        `Run a scrape to price them.`,
-                    'success'
-                );
-                await loadData();
+
+                setStatus(`Found ${body.decks} deck${body.decks === 1 ? '' : 's'}. Pricing...`);
+                await doScrape(body.user);
             } catch (err) {
                 setStatus(err.message, 'error');
             } finally {
@@ -390,18 +396,21 @@
 
         async function runScrape() {
             busy(true);
-            setStatus('Scraping — this takes a minute...');
             try {
-                const res = await fetch('/api/scrape', { method: 'POST' });
-                const body = await res.json();
-                if (!res.ok) throw new Error(body.error || 'Scrape failed');
-                setStatus(`Done — ${body.decks ?? '?'} decks priced.`, 'success');
-                await loadData();
-            } catch (err) {
-                setStatus(err.message, 'error');
+                await doScrape();
             } finally {
                 busy(false);
             }
+        }
+
+        /** Shared tail of both buttons: run the scrape and report. */
+        async function doScrape() {
+            setStatus('Pricing decks — this takes a minute...');
+            const res = await fetch('/api/scrape', { method: 'POST' });
+            const body = await res.json();
+            if (!res.ok) throw new Error(body.error || 'Scrape failed');
+            setStatus(`Done — ${body.decks ?? '?'} decks priced.`, 'success');
+            await loadData();
         }
 
         async function loadUser() {
