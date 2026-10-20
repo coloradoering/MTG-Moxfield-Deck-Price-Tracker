@@ -296,24 +296,18 @@ app.post('/api/scrape', async (req, res) => {
   scrapeRunning = true;
   scrapeProgress = 'starting';
   try {
-    // The scraper attaches to an existing browser, so make sure one exists
-    // before spawning it. Starting takes a few seconds; the UI is told so.
+    // Refuse up front rather than letting the scraper fail obscurely inside a
+    // page. This only checks; starting Chrome is the user's job (see chrome.js).
     scrapeProgress = 'checking browser';
-    const launched = await chrome.ensureChrome({
-      log: (msg) => {
-        scrapeProgress = msg;
-        console.log(msg);
-      },
-    });
-
-    if (launched.status === 'no-browser' || launched.status === 'failed') {
-      throw new Error(launched.message || 'No usable browser available.');
+    const status = await chrome.checkChrome();
+    if (!status.up) {
+      throw new Error(status.message);
     }
 
     const result = await runScrape((msg) => {
       scrapeProgress = msg;
     });
-    res.json({ ok: true, browser: launched.status, ...result });
+    res.json({ ok: true, ...result });
   } catch (err) {
     res.status(500).json({ error: err.message });
   } finally {
@@ -328,8 +322,13 @@ app.get('/api/scrape/status', (req, res) =>
 
 /** Whether a debuggable Chrome is available, so the UI can say so up front. */
 app.get('/api/chrome', async (req, res) => {
-  const up = await chrome.isChromeUp();
-  res.json({ running: up, url: chrome.CHROME_URL, browser: up ? 'ok' : chrome.findChrome() || null });
+  const status = await chrome.checkChrome();
+  res.json({
+    running: status.up,
+    url: chrome.CHROME_URL,
+    browser: status.browser,
+    message: status.message,
+  });
 });
 
 app.post('/api/scrub', async (req, res) => {

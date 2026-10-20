@@ -1,151 +1,64 @@
 /**
- * Chrome lifecycle for the scraper.
+ * Chrome availability check for the scraper.
  *
- * The scraper attaches to a real, visible Chrome rather than launching its own
- * (see README, "Why a browser is required"), so something has to guarantee one is
- * listening on the debugging port. This module probes for it and starts it if it
- * is not there.
+ * This module deliberately does NOT launch a browser.
  *
- * Two rules, both learned the hard way:
+ * An earlier version did, and it was wrong in a way that took three attempts to
+ * see clearly. Windows gives Chrome single-instance behaviour: if an instance is
+ * already running for a profile, a new invocation hands its flags to the existing
+ * process, which ignores --remote-debugging-port and exits. So auto-launch
+ * silently did nothing whenever the user already had Chrome open, and the
+ * failure surfaced far away as a CORS error inside the page.
  *
- *  - Never `taskkill` Chrome to "reset" it. The previous start-chrome.bat killed
- *    every Chrome window, including whatever the user was working in. If a tab is
- *    open in the debug profile we reuse it; if the port is dead we start a
- *    separate instance; if the port is taken by something that is not Chrome we
- *    say so and stop.
- *
- *  - Never assume the launch worked. Starting a browser takes a few seconds, so
- *    poll the port until it answers rather than racing it.
+ * Trying to manage the user's browser from a web request was the mistake. The
+ * scraper needs a specific Chrome, started a specific way, with a logged-in
+ * Moxfield session. That is the user's decision, taken deliberately, once. The
+ * app's job is to say clearly whether it is there.
  */
 
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const { spawn } = require('child_process');
-
 const CHROME_URL = process.env.CHROME_URL || 'http://localhost:9222';
-const PROFILE_DIR =
-  process.env.CHROME_PROFILE_DIR || path.join(os.homedir(), 'chrome-debug-profile');
 
-/** Candidate browser executables, in preference order. */
-function chromeCandidates() {
-  if (process.env.CHROME_PATH) return [process.env.CHROME_PATH];
-  if (process.platform === 'win32') {
-    return [
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-      path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
-      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-      'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-    ];
-  }
-  if (process.platform === 'darwin') {
-    return [
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      '/Applications/Chromium.app/Contents/MacOS/Chromium',
-      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-    ];
-  }
-  return ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'];
-}
+const START_HINT =
+  'Start it with start-chrome.bat (Windows), then log into Moxfield in that window.';
 
-function findChrome() {
-  return chromeCandidates().find((p) => {
-    try {
-      return p && fs.existsSync(p);
-    } catch {
-      return false;
-    }
-  });
-}
-
-/** True if something is answering the DevTools endpoint on the debug port. */
-async function isChromeUp(url = CHROME_URL, timeoutMs = 1500) {
+/**
+ * Is a debuggable Chrome answering on the debug port?
+ *
+ * Returns { up, browser, message }. `browser` is the reported product name when
+ * up, so the caller can distinguish Chrome from something else holding the port.
+ */
+async function checkChrome(url = CHROME_URL, timeoutMs = 2000) {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     const res = await fetch(`${url}/json/version`, { signal: ctrl.signal });
     clearTimeout(timer);
-    if (!res.ok) return false;
+
+    if (!res.ok) {
+      return {
+        up: false,
+        browser: null,
+        message: `Something answered on ${url} but returned HTTP ${res.status}. ${START_HINT}`,
+      };
+    }
+
     const body = await res.json();
-    // Distinguish Chrome from anything else that might hold the port.
-    return Boolean(body && (body.Browser || body.webSocketDebuggerUrl));
+    if (!body || !(body.webSocketDebuggerUrl || body.Browser)) {
+      return {
+        up: false,
+        browser: null,
+        message: `Nothing that looks like a browser is listening on ${url}. ${START_HINT}`,
+      };
+    }
+
+    return { up: true, browser: body.Browser || 'unknown', message: null };
   } catch {
-    return false;
-  }
-}
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Ensure a debuggable Chrome is available.
- *
- * Two cases that used to be conflated:
- *
- *  1. The port already answers. Use it — but only after checking that the browser
- *     behind it actually works, which is what the caller does next.
- *
- *  2. The port is dead. Launch with --remote-debugging-port and a dedicated
- *     profile. This is the case a plain `start chrome.exe` cannot recover from:
- *     if Chrome is already running for that profile it hands the flags to the
- *     existing process, ignores them, and exits, so the port never opens. A
- *     separate profile directory cannot collide that way, and never touches the
- *     user's normal browsing session.
- *
- * Returns { status, url, started, pid?, message }, where status is one of
- * 'already-running' | 'started' | 'no-browser' | 'failed'.
- */
-async function ensureChrome({ url = CHROME_URL, log = () => {}, timeoutMs = 20000 } = {}) {
-  if (await isChromeUp(url)) {
-    return { status: 'already-running', url, started: false };
-  }
-
-  const exe = findChrome();
-  if (!exe) {
     return {
-      status: 'no-browser',
-      url,
-      started: false,
-      message:
-        'Could not find Chrome. Install it, or set CHROME_PATH to the executable, ' +
-        'then start it with --remote-debugging-port=9222.',
+      up: false,
+      browser: null,
+      message: `No browser is listening on ${url}. ${START_HINT}`,
     };
   }
-
-  log(`Starting ${path.basename(exe)} with remote debugging...`);
-
-  const args = [
-    '--remote-debugging-port=9222',
-    `--user-data-dir=${PROFILE_DIR}`,
-    '--no-first-run',
-    '--no-default-browser-check',
-    '--no-startup-window',
-  ];
-
-  const child = spawn(exe, args, { detached: true, stdio: 'ignore' });
-  child.unref();
-
-  // Exit codes here are not meaningful: Chrome forks and the launcher returns
-  // immediately, so a zero exit says nothing about whether the port opened.
-  // Wait on the port, not the process.
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    await sleep(250);
-    if (await isChromeUp(url)) {
-      return { status: 'started', url, started: true, pid: child.pid };
-    }
-  }
-
-  return {
-    status: 'failed',
-    url,
-    started: false,
-    message:
-      `Started Chrome but nothing answered on ${url} within ${Math.round(timeoutMs / 1000)}s. ` +
-      'If Chrome is already running for that profile it will ignore the debugging flag — ' +
-      'quit that instance, or run start-chrome.bat. Setting CHROME_PROFILE_DIR to an unused ' +
-      'directory also avoids the clash.',
-  };
 }
 
-module.exports = { ensureChrome, isChromeUp, findChrome, CHROME_URL, PROFILE_DIR };
+module.exports = { checkChrome, CHROME_URL, START_HINT };

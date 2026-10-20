@@ -419,6 +419,14 @@
         async function runScrape() {
             busy(true);
             try {
+                // Fail fast and clearly if the debug browser is not running, rather
+                // than letting the scrape discover it halfway through.
+                const chk = await fetch('/api/chrome').then((r) => r.json());
+                if (!chk.running) {
+                    setStatus(chk.message || 'Chrome is not running with remote debugging on port 9222.', 'error');
+                    return;
+                }
+
                 const username = document.getElementById('usernameInput').value.trim();
                 if (username) {
                     // Make sure the field's user is the tracked one, and that their
