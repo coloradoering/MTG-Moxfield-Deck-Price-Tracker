@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Moxfield Deck Tracker</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0b1220;
+            color: #e2e8f0;
+            min-height: 100vh;
+            padding: 24px;
+        }
+        .container { max-width: 1500px; margin: auto; }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        h1 { color: #38bdf8; font-size: 1.5rem; font-weight: 600; }
+        .subtitle { color: #64748b; font-size: 0.85rem; }
+
+        .toolbar { display: flex; gap: 8px; }
+        .btn {
+            background: #1e293b;
+            color: #e2e8f0;
+            border: 1px solid #334155;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn:hover { background: #334155; border-color: #475569; }
+        .btn.primary { background: #38bdf8; color: #0b1220; border-color: #38bdf8; font-weight: 600; }
+        .btn.primary:hover { background: #7dd3fc; }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: #131c2e;
+            padding: 18px;
+            border-radius: 10px;
+            border: 1px solid #1e293b;
+        }
+        .stat-label { font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+        .stat-value { font-size: 1.5rem; font-weight: 600; color: #38bdf8; }
+        .stat-value.positive { color: #10b981; }
+        .stat-value.negative { color: #f43f5e; }
+
+        .chart-card {
+            background: #131c2e;
+            padding: 24px;
+            border-radius: 10px;
+            border: 1px solid #1e293b;
+            margin-bottom: 24px;
+        }
+        .chart-card h2 { color: #e2e8f0; margin-bottom: 16px; font-size: 1rem; font-weight: 600; }
+        .chart-container { position: relative; height: 560px; width: 100%; }
+
+        .deck-section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .deck-section-header h2 { color: #e2e8f0; font-size: 1rem; font-weight: 600; }
+        .hint { color: #64748b; font-size: 0.8rem; }
+
+        .deck-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 16px;
+        }
+        .deck-card {
+            background: #131c2e;
+            padding: 12px;
+            border-radius: 10px;
+            border: 1px solid #1e293b;
+            cursor: pointer;
+            transition: all 0.15s;
+            position: relative;
+            overflow: visible;
+        }
+        .deck-card:hover { border-color: #334155; background: #172236; }
+        .deck-card.hidden-deck { opacity: 0.35; }
+        .deck-card::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            width: 3px;
+            background: var(--deck-color);
+            z-index: 5;
+        }
+
+        .deck-image-row {
+    position: relative;
+    margin-bottom: 10px;
+    width: 100%;
+    padding-bottom: 100%;
+}
+.deck-image-row img {
+    position: absolute;
+    top: 4%;
+    left: 15%;
+    width: 60%;
+    aspect-ratio: 488 / 680;
+    object-fit: contain;
+    border-radius: 6px;
+    background: #0b1220;
+    transition: transform 0.2s, z-index 0s;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+    z-index: 1;
+}
+.deck-image-row img:nth-child(2) {
+    left: 25%;
+    top: 12%;
+    z-index: 0;
+}
+.deck-image-row img:nth-child(3) {
+    left: 35%;
+    top: 20%;
+    z-index: -1;
+}
+.deck-image-row img:hover {
+    z-index: 10;
+    transform: scale(1.35);
+}
+
+.deck-name {
+    font-size: 1rem;
+    color: #94a3b8;
+    margin-bottom: 6px;
+    word-break: break-word;
+}
+        .deck-price { font-size: 1.4rem; font-weight: 600; color: var(--deck-color); }
+        .deck-change { font-size: 0.8rem; margin-top: 4px; }
+        .deck-change.positive { color: #10b981; }
+        .deck-change.negative { color: #f43f5e; }
+        .preview-btn {
+            margin-top: 10px;
+            background: #1e293b;
+            color: #94a3b8;
+            border: 1px solid #334155;
+            padding: 5px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            transition: all 0.15s;
+            width: 100%;
+        }
+        .preview-btn:hover { background: #334155; color: #e2e8f0; border-color: #475569; }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 40px;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal-box {
+            background: #131c2e;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            width: 100%;
+            max-width: 1100px;
+            height: 85vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid #1e293b;
+            flex-shrink: 0;
+        }
+        .modal-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #e2e8f0;
+            word-break: break-word;
+        }
+        .modal-close {
+            background: #f43f5e;
+            color: white;
+            border: none;
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1rem;
+            flex-shrink: 0;
+            margin-left: 12px;
+        }
+        .modal-close:hover { background: #e11d48; }
+        .modal-body {
+            flex: 1;
+            overflow: hidden;
+        }
+        .modal-body iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            display: block;
+        }
+        .modal-footer {
+            padding: 10px 20px;
+            border-top: 1px solid #1e293b;
+            font-size: 0.75rem;
+            color: #64748b;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        .modal-footer a { color: #38bdf8; text-decoration: none; }
+        .modal-footer a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>🎴 Moxfield Deck Tracker</h1>
+                <p class="subtitle" id="lastUpdated"></p>
+            </div>
+            <div class="toolbar">
+                <button class="btn" onclick="toggleAll()" id="toggleAllBtn">Hide All</button>
+                <button class="btn primary" onclick="loadData()">🔄 Refresh</button>
+            </div>
+        </header>
+
+        <div class="stats" id="stats"></div>
+
+        <div class="chart-card">
+            <h2>📈 Value Trends</h2>
+            <div class="chart-container">
+                <canvas id="valueChart"></canvas>
+            </div>
+        </div>
+
+        <div class="deck-section-header">
+            <h2>Deck Breakdown</h2>
+            <span class="hint">Click a card to toggle its line — click Preview to see the deck</span>
+        </div>
+        <div class="deck-grid" id="deckGrid"></div>
+    </div>
+
+    <!-- Preview Modal -->
+    <div class="modal-overlay" id="previewModal" onclick="if(event.target===this) closePreview()">
+        <div class="modal-box">
+            <div class="modal-header">
+                <div class="modal-title" id="modalTitle">Deck Preview</div>
+                <button class="modal-close" onclick="closePreview()">✕</button>
+            </div>
+            <div class="modal-body">
+                <iframe id="previewIframe" src="about:blank" loading="lazy"></iframe>
+            </div>
+            <div class="modal-footer">
+                <span>Preview powered by Moxfield</span>
+                <a id="openInMoxfield" href="#" target="_blank" rel="noopener">Open in Moxfield ↗</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let chart = null;
+        let allHistory = [];
+        let allDecks = [];
+        let hiddenDecks = new Set();
+
+        async function loadData() {
+            try {
+                const [historyRes, decksRes] = await Promise.all([
+                    fetch('/api/history'),
+                    fetch('/api/decks')
+                ]);
+
+                allHistory = await historyRes.json();
+                allDecks = await decksRes.json();
+
+                if (allHistory.length === 0) {
+                    document.getElementById('lastUpdated').textContent = 'No data yet. Run the scraper first.';
+                    return;
+                }
+
+                const latest = allHistory[allHistory.length - 1];
+                const previous = allHistory.length > 1 ? allHistory[allHistory.length - 2] : null;
+
+                document.getElementById('lastUpdated').textContent = `Last updated: ${latest.date}`;
+
+                renderStats(latest, previous);
+                renderDeckCards(latest, previous);
+                renderChart();
+                updateToggleAllBtn();
+            } catch (err) {
+                console.error('Error loading data:', err);
+            }
+        }
+
+        function renderStats(latest, previous) {
+            const prices = Object.entries(latest.prices).filter(([, v]) => v > 0);
+            const totalValue = prices.reduce((sum, [, v]) => sum + v, 0);
+            const avgValue = totalValue / prices.length;
+            const mostValuable = [...prices].sort((a, b) => b[1] - a[1])[0];
+
+            let changeHtml = '<span style="color:#64748b">—</span>';
+            let changeClass = '';
+            if (previous) {
+                const prevTotal = Object.values(previous.prices).filter(v => v > 0).reduce((s, v) => s + v, 0);
+                const diff = totalValue - prevTotal;
+                const pct = ((diff / prevTotal) * 100).toFixed(2);
+                const sign = diff >= 0 ? '+' : '';
+                changeClass = diff >= 0 ? 'positive' : 'negative';
+                changeHtml = `${sign}$${diff.toFixed(2)} (${sign}${pct}%)`;
+            }
+
+            document.getElementById('stats').innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-label">Total Portfolio</div>
+                    <div class="stat-value">$${totalValue.toFixed(2)}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Change Since Last</div>
+                    <div class="stat-value ${changeClass}">${changeHtml}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Average Deck</div>
+                    <div class="stat-value">$${avgValue.toFixed(2)}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Most Valuable</div>
+                    <div class="stat-value" style="font-size:1rem; word-break:break-word;">${mostValuable ? mostValuable[0] : 'N/A'}</div>
+                </div>
+            `;
+        }
+
+        function renderDeckCards(latest, previous) {
+            const sorted = Object.entries(latest.prices)
+                .filter(([, v]) => v > 0)
+                .sort((a, b) => b[1] - a[1]);
+
+            const grid = document.getElementById('deckGrid');
+            grid.innerHTML = '';
+
+            for (const [name, price] of sorted) {
+                const deckInfo = allDecks.find(d => d.name === name);
+                const color = deckInfo ? deckInfo.color : '#94a3b8';
+                const deckUrl = deckInfo ? deckInfo.url : null;
+                const isHidden = hiddenDecks.has(name);
+
+                const card = document.createElement('div');
+                card.className = 'deck-card' + (isHidden ? ' hidden-deck' : '');
+                card.style.setProperty('--deck-color', color);
+                card.addEventListener('click', () => toggleDeck(name));
+
+                if (deckInfo && deckInfo.image) {
+                    const images = Array.isArray(deckInfo.image) ? deckInfo.image : [deckInfo.image];
+                    const imgRow = document.createElement('div');
+                    imgRow.className = 'deck-image-row';
+
+                    images.forEach(src => {
+                        const img = document.createElement('img');
+                        img.src = src;
+                        img.alt = name;
+                        imgRow.appendChild(img);
+                    });
+
+                    card.appendChild(imgRow);
+                }
+
+                const nameDiv = document.createElement('div');
+                nameDiv.className = 'deck-name';
+                nameDiv.textContent = name;
+
+                const priceDiv = document.createElement('div');
+                priceDiv.className = 'deck-price';
+                priceDiv.textContent = '$' + price.toFixed(2);
+
+                card.appendChild(nameDiv);
+                card.appendChild(priceDiv);
+
+                if (previous && previous.prices[name] > 0) {
+                    const diff = price - previous.prices[name];
+                    const pct = ((diff / previous.prices[name]) * 100).toFixed(2);
+                    const sign = diff >= 0 ? '+' : '';
+                    const changeDiv = document.createElement('div');
+                    changeDiv.className = 'deck-change ' + (diff >= 0 ? 'positive' : 'negative');
+                    changeDiv.textContent = `${sign}$${diff.toFixed(2)} (${sign}${pct}%)`;
+                    card.appendChild(changeDiv);
+                }
+
+                if (deckUrl) {
+                    const previewBtn = document.createElement('button');
+                    previewBtn.className = 'preview-btn';
+                    previewBtn.textContent = '🔍 Preview Deck';
+                    previewBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        openPreview(name, deckUrl);
+                    });
+                    card.appendChild(previewBtn);
+                }
+
+                grid.appendChild(card);
+            }
+        }
+
+        function refreshCards() {
+            const latest = allHistory[allHistory.length - 1];
+            const previous = allHistory.length > 1 ? allHistory[allHistory.length - 2] : null;
+            renderDeckCards(latest, previous);
+        }
+
+        function toggleDeck(name) {
+            if (hiddenDecks.has(name)) hiddenDecks.delete(name);
+            else hiddenDecks.add(name);
+            refreshCards();
+            renderChart();
+            updateToggleAllBtn();
+        }
+
+        function toggleAll() {
+            if (hiddenDecks.size === allDecks.length) hiddenDecks.clear();
+            else hiddenDecks = new Set(allDecks.map(d => d.name));
+            refreshCards();
+            renderChart();
+            updateToggleAllBtn();
+        }
+
+        function updateToggleAllBtn() {
+            const btn = document.getElementById('toggleAllBtn');
+            btn.textContent = hiddenDecks.size === allDecks.length ? 'Show All' : 'Hide All';
+        }
+
+        function openPreview(name, deckUrl) {
+            const embedUrl = deckUrl.replace('/decks/', '/embed/');
+            document.getElementById('modalTitle').textContent = name;
+            document.getElementById('previewIframe').src = embedUrl;
+            document.getElementById('openInMoxfield').href = deckUrl;
+            document.getElementById('previewModal').classList.add('active');
+        }
+
+        function closePreview() {
+            document.getElementById('previewIframe').src = 'about:blank';
+            document.getElementById('previewModal').classList.remove('active');
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closePreview();
+        });
+
+        function renderChart() {
+            const dates = allHistory.map(h => h.date);
+            const latest = allHistory[allHistory.length - 1];
+            const deckNames = Object.keys(latest.prices).filter(n => latest.prices[n] > 0);
+
+            const fallbackColors = [
+                '#f43f5e', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6',
+                '#ec4899', '#06b6d4', '#84cc16', '#eab308', '#6366f1',
+                '#14b8a6', '#f97316', '#a855f7', '#22c55e', '#e11d48',
+                '#0ea5e9'
+            ];
+
+            const datasets = deckNames
+                .filter(name => !hiddenDecks.has(name))
+                .map((name, i) => {
+                    const info = allDecks.find(d => d.name === name);
+                    const color = info ? info.color : fallbackColors[i % fallbackColors.length];
+                    return {
+                        label: name,
+                        data: allHistory.map(h => h.prices[name] || null),
+                        borderColor: color,
+                        backgroundColor: color + '20',
+                        tension: 0.15,
+                        spanGaps: true,
+                        pointRadius: 2,
+                        pointHoverRadius: 5,
+                        borderWidth: 2
+                    };
+                });
+
+            if (chart) chart.destroy();
+
+            const ctx = document.getElementById('valueChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: { labels: dates, datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    animation: {
+                        duration: 1200,
+                        easing: 'easeOutQuart',
+                        delay: (ctx) => {
+                            if (ctx.type === 'data' && ctx.mode === 'default') {
+                                return ctx.dataIndex * 50 + ctx.datasetIndex * 100;
+                            }
+                            return 0;
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: '#0b1220',
+                            borderColor: '#334155',
+                            borderWidth: 1,
+                            padding: 12,
+                            titleColor: '#e2e8f0',
+                            bodyColor: '#e2e8f0',
+                            itemSort: (a, b) => (b.parsed.y || 0) - (a.parsed.y || 0),
+                            callbacks: {
+                                label: ctx => {
+                                    const v = ctx.parsed.y;
+                                    return `  ${ctx.dataset.label}: ${v ? '$' + v.toFixed(2) : '—'}`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            ticks: { color: '#64748b', callback: v => '$' + v },
+                            grid: { color: '#1e293b' }
+                        },
+                        x: {
+                            ticks: { color: '#64748b', maxRotation: 45, autoSkipPadding: 20 },
+                            grid: { color: '#1e293b' }
+                        }
+                    }
+                }
+            });
+        }
+
+        loadData();
+    </script>
+</body>
+</html>
