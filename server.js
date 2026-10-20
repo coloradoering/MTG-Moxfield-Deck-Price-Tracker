@@ -1,70 +1,392 @@
 const express = require('express');
 const { MongoClient } = require('mongodb');
-const decks = require('./decks');
+const fs = require('fs');
+const { spawn } = require('child_process');
+
+const registry = require('./deck-registry');
+const api = require('./moxfield-api');
+const chrome = require('./chrome');
+const { colorFor } = require('./colors');
 
 const app = express();
-const PORT = 3000;
-const MONGO_URL = 'mongodb://localhost:27017';
-const DB_NAME = 'moxfield_tracker';
+const PORT = Number(process.env.PORT) || 3000;
+const MONGO_URL = process.env.MONGO_URL || 'mongodb://localhost:27017';
+const DB_NAME = process.env.DB_NAME || 'moxfield_tracker';
+const DEFAULT_USER = process.env.MOXFIELD_USER || null;
 
-app.use(express.static('public'));
+app.use(express.json());
+
+// Static assets, with no-cache on HTML so a code change is never masked by a
+// stale page in the browser. Everything else can cache normally.
+app.use(
+  express.static('public', {
+    setHeaders: (res, path) => {
+      if (path.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+    },
+  })
+);
+
+async function withDb(fn) {
+  const client = new MongoClient(MONGO_URL);
+  try {
+    await client.connect();
+    return await fn(client.db(DB_NAME));
+  } finally {
+    await client.close();
+  }
+}
+
+/** Snapshots may predate the `vendor` field; those were scraped as Card Kingdom. */
+const LEGACY_VENDOR = 'cardkingdom';
+
+/**
+ * Reduce a snapshot to one vendor's totals.
+ *
+ * Newer snapshots carry a `vendors` map with every storefront's total. Older
+ * ones only have `prices`, taken from the deck page's displayed total, which was
+ * whatever storefront the browser had selected — in practice Card Kingdom.
+ */
+function pricesForVendor(snapshot, vendor) {
+  if (snapshot.vendors) {
+    const out = {};
+    for (const [name, values] of Object.entries(snapshot.vendors)) {
+      if (typeof values[vendor] === 'number') out[name] = values[vendor];
+    }
+    return out;
+  }
+  const snapVendor = snapshot.vendor || LEGACY_VENDOR;
+  return snapVendor === vendor ? snapshot.prices || {} : {};
+}
+
+/**
+ * Which Moxfield user this install tracks, if any.
+ *
+ * The UI is authoritative. MOXFIELD_USER used to be consulted first, which meant
+ * a stale value in the shell silently overrode the username set in the dashboard —
+ * you would track one user and price another. It is now only a seed for a fresh
+ * install that has never chosen a user in the UI.
+ */
+async function currentUser(db) {
+  const pref = await db.collection('settings').findOne({ _id: 'prefs' });
+  return pref?.moxfieldUser || DEFAULT_USER || null;
+}
+
+// ---------------------------------------------------------------- tracking user
+
+app.get('/api/user', async (req, res) => {
+  try {
+    const user = await withDb(currentUser);
+    res.json({ user });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Look up a Moxfield username without importing anything.
+ *
+ * Backs the Search button: it answers "do we already know this profile?" from the
+ * registry, so switching between users you have scraped is instant and needs no
+ * browser. Importing is the scrape's job now.
+ */
+app.get('/api/user/:username', async (req, res) => {
+  const user = String(req.params.username || '').trim();
+  if (!user) return res.status(400).json({ error: 'Username is required.' });
+
+  try {
+    const result = await withDb(async (db) => {
+      const decks = await registry.listDecks(db, user);
+      const snap = await db
+        .collection('price_logs')
+        .findOne({ user }, { sort: { date: -1 } });
+      return { decks, latestDate: snap?.date || null };
+    });
+
+    res.json({
+      user,
+      known: result.decks.length > 0,
+      decks: result.decks.length,
+      lastPricedAt: result.latestDate,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Set the tracked Moxfield user and import their decks.
+ *
+ * Called by the scrape rather than the Search button: the username is the only
+ * input, and the deck list is whatever that profile publishes. When the username
+ * changes, the previous user's decks are deactivated rather than deleted, so
+ * their price history survives.
+ */
+app.post('/api/user', async (req, res) => {
+  const user = String((req.body && req.body.username) || '').trim();
+  if (!user) return res.status(400).json({ error: 'Username is required.' });
+  if (!/^[\w.\-]{1,64}$/.test(user)) {
+    return res.status(400).json({ error: 'That is not a valid Moxfield username.' });
+  }
+
+  try {
+    const result = await withDb(async (db) => {
+      const previous = await currentUser(db);
+
+      // Switching to a user we already have decks for is a pure database change:
+      // no browser, no import. The scrape is what discovers new decks.
+      if (req.body && req.body.existing) {
+        const known = await registry.listDecks(db, user);
+        if (known.length === 0) {
+          throw new Error(`No decks are stored for "${user}". Run a scrape to import them.`);
+        }
+        await db
+          .collection('settings')
+          .updateOne({ _id: 'prefs' }, { $set: { moxfieldUser: user } }, { upsert: true });
+        return { previous, count: known.length, synced: null };
+      }
+
+      // Import needs a browser to talk to Moxfield's API, so reuse the scraper's
+      // connection path rather than opening a second one here.
+      const decks = await api.discoverDecks(user);
+      if (decks.length === 0) {
+        throw new Error(
+          `No public decks found for "${user}". Check the username, and that the profile is public.`
+        );
+      }
+
+      await db
+        .collection('settings')
+        .updateOne({ _id: 'prefs' }, { $set: { moxfieldUser: user } }, { upsert: true });
+
+      let synced = null;
+      if (previous !== user) {
+        synced = await registry.syncDecks(db, user, decks);
+      }
+
+      return { previous, count: decks.length, synced };
+    });
+
+    res.json({ ok: true, user, decks: result.count, previous: result.previous, synced: result.synced });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------- dashboard data
 
 app.get('/api/history', async (req, res) => {
-    try {
-        const client = new MongoClient(MONGO_URL);
-        await client.connect();
-        const db = client.db(DB_NAME);
-        const history = await db.collection('price_logs').find().sort({ date: 1 }).toArray();
-        await client.close();
-        res.json(history);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+  try {
+    const vendor = api.resolveVendor(req.query.vendor);
+    // Snapshots are per-user. Without this filter every tracked user's history is
+    // merged into one chart, and decks owned by two people blend into a single line.
+    const tracked = req.query.user || (await withDb(currentUser));
+    const history = await withDb((db) =>
+      db
+        .collection('price_logs')
+        .find(tracked ? { user: tracked } : {})
+        .sort({ date: 1 })
+        .toArray()
+    );
+    res.json(
+      history.map((snap) => ({
+        date: snap.date,
+        user: snap.user,
+        vendor,
+        prices: pricesForVendor(snap, vendor),
+        images: snap.images || {},
+      }))
+    );
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 app.get('/api/latest', async (req, res) => {
-    try {
-        const client = new MongoClient(MONGO_URL);
-        await client.connect();
-        const db = client.db(DB_NAME);
-        const latest = await db.collection('price_logs').findOne({}, { sort: { date: -1 } });
-        await client.close();
-        res.json(latest);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+  try {
+    const vendor = api.resolveVendor(req.query.vendor);
+    const tracked = req.query.user || (await withDb(currentUser));
+    const latest = await withDb((db) =>
+      db.collection('price_logs').findOne(tracked ? { user: tracked } : {}, { sort: { date: -1 } })
+    );
+    if (!latest) return res.json(null);
+    res.json({
+      date: latest.date,
+      user: latest.user,
+      vendor,
+      prices: pricesForVendor(latest, vendor),
+      images: latest.images || {},
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
+app.get('/api/vendors', (req, res) => {
+  res.json({
+    default: api.DEFAULT_VENDOR,
+    vendors: Object.entries(api.VENDORS).map(([key, v]) => ({ key, label: v.label })),
+  });
+});
+
+/** Tracked decks come from the registry collection, not from a hardcoded list. */
 app.get('/api/decks', async (req, res) => {
-    try {
-        const client = new MongoClient(MONGO_URL);
-        await client.connect();
-        const db = client.db(DB_NAME);
-        const latest = await db.collection('price_logs').findOne({}, { sort: { date: -1 } });
-        await client.close();
+  try {
+    // Default to the tracked user. Listing every user ever seen would show decks
+    // the dashboard is not currently tracking, which contradicts the username
+    // control above it.
+    const tracked = req.query.user || (await withDb(currentUser));
+    const vendor = api.resolveVendor(req.query.vendor);
 
-        if (!latest) return res.json([]);
+    const { decks, latest, fallback } = await withDb(async (db) => {
+      const users = tracked ? [tracked] : await registry.listUsers(db);
+      const all = [];
+      for (const u of users) {
+        all.push(...(await registry.listDecks(db, u)));
+      }
+      const snap = await db
+        .collection('price_logs')
+        .findOne(tracked ? { user: tracked } : {}, { sort: { date: -1 } });
 
-        const colors = [
-            '#f43f5e', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6',
-            '#ec4899', '#06b6d4', '#84cc16', '#eab308', '#6366f1',
-            '#14b8a6', '#f97316', '#a855f7', '#22c55e', '#e11d48',
-            '#0ea5e9', '#d946ef', '#ef4444'
-        ];
-
-        const deckList = decks.map((deck, i) => ({
-            name: deck.name,
-            color: colors[i % colors.length],
-            url: deck.url,
-            image: latest.images?.[deck.name] || null
+      // The registry is populated by the scraper. If someone upgrades the code
+      // without re-scraping it is empty, and the dashboard would show nothing at
+      // all despite having a full price history. Degrade instead of going blank.
+      if (all.length === 0 && snap) {
+        const names = new Set([
+          ...Object.keys(pricesForVendor(snap, vendor)),
+          ...Object.keys(snap.prices || {}),
+        ]);
+        const derived = [...names].map((name) => ({
+          name,
+          user: snap.user || null,
+          publicId: snap.deckIds?.[name] || null,
+          format: snap.formats?.[name] || null,
+          active: true,
         }));
+        return { decks: derived, latest: snap, fallback: true };
+      }
 
-        res.json(deckList);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+      return { decks: all, latest: snap, fallback: false };
+    });
+
+    res.json({
+      decks: decks.map((d) => ({
+        name: d.name,
+        user: d.user,
+        publicId: d.publicId,
+        format: d.format,
+        color: colorFor(d.name),
+        url: d.publicId ? `https://moxfield.com/decks/${d.publicId}` : null,
+        image: latest?.images?.[d.name]?.[0] || null,
+      })),
+      source: fallback ? 'price_logs' : 'registry',
+      vendor,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
+
+// ---------------------------------------------------------------- scrape / scrub
+
+let scrapeRunning = false;
+let scrapeProgress = '';
+
+app.post('/api/scrape', async (req, res) => {
+  if (scrapeRunning) return res.status(409).json({ error: 'Scrape already in progress.' });
+  scrapeRunning = true;
+  scrapeProgress = 'starting';
+  try {
+    // Refuse up front rather than letting the scraper fail obscurely inside a
+    // page. This only checks; starting Chrome is the user's job (see chrome.js).
+    scrapeProgress = 'checking browser';
+    const status = await chrome.checkChrome();
+    if (!status.up) {
+      throw new Error(status.message);
+    }
+
+    const result = await runScrape((msg) => {
+      scrapeProgress = msg;
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    scrapeRunning = false;
+    scrapeProgress = '';
+  }
+});
+
+app.get('/api/scrape/status', (req, res) =>
+  res.json({ running: scrapeRunning, message: scrapeProgress })
+);
+
+/** Whether a debuggable Chrome is available, so the UI can say so up front. */
+app.get('/api/chrome', async (req, res) => {
+  const status = await chrome.checkChrome();
+  res.json({
+    running: status.up,
+    url: chrome.CHROME_URL,
+    browser: status.browser,
+    message: status.message,
+  });
+});
+
+app.post('/api/scrub', async (req, res) => {
+  const { date } = req.body || {};
+  if (!date || !/^\d{4}-\d{2}-\d{2}/.test(date)) {
+    return res.status(400).json({ error: 'Invalid date. Use YYYY-MM-DD.' });
+  }
+  try {
+    const result = await withDb((db) =>
+      db.collection('price_logs').deleteMany({ date: { $regex: `^${date}` } })
+    );
+    res.json({ ok: true, deleted: result.deletedCount });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * Run the scraper in-process.
+ *
+ * Deliberately shells out to run.js rather than importing it: run.js drives a
+ * real browser and calls process.exit, and a failed scrape should never take the
+ * dashboard down with it.
+ *
+ * The tracked username is passed explicitly. run.js otherwise falls back to
+ * MOXFIELD_USER from the environment, which is whatever the shell happened to
+ * have — meaning the dashboard would silently price a different user than the one
+ * being tracked.
+ */
+async function runScrape(onProgress) {
+  const user = await withDb(currentUser);
+  if (!user) {
+    throw new Error('No Moxfield username is being tracked. Enter one and press Track.');
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['run.js', '--user', user], {
+      cwd: __dirname,
+      env: { ...process.env, MOXFIELD_USER: user },
+    });
+    let out = '';
+    child.stdout.on('data', (b) => {
+      out += b.toString();
+      const line = out.trim().split('\n').pop();
+      if (line) onProgress(line.trim());
+    });
+    child.stderr.on('data', (b) => {
+      out += b.toString();
+    });
+    child.on('close', (code) => {
+      if (code !== 0) return reject(new Error(out.trim().split('\n').slice(-4).join(' ')));
+      const m = out.match(/Saved as (.+?)\./);
+      const priced = out.match(/(\d+) priced/);
+      resolve({ date: m ? m[1] : null, decks: priced ? Number(priced[1]) : null, user });
+    });
+  });
+}
 
 app.listen(PORT, () => {
-    console.log(`📊 Dashboard running at http://localhost:${PORT}`);
+  console.log(`📊 Dashboard running at http://localhost:${PORT}`);
 });

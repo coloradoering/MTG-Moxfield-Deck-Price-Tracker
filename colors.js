@@ -1,0 +1,29 @@
+/**
+ * Chart colours.
+ *
+ * Deck selection lives in the database now (see deck-registry.js); this file is
+ * only the palette used to draw each deck's line.
+ */
+
+const PALETTE = [
+  '#f43f5e', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6',
+  '#ec4899', '#06b6d4', '#84cc16', '#eab308', '#6366f1',
+  '#14b8a6', '#f97316', '#a855f7', '#22c55e', '#ef4444',
+  '#0ea5e9', '#d946ef', '#65a30d', '#fbbf24', '#4f46e5',
+];
+
+/**
+ * Stable colour per deck name.
+ *
+ * Hashed rather than assigned by position, so a deck keeps its colour across
+ * snapshots even when decks are added or removed from the collection.
+ */
+function colorFor(name) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) {
+    hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  }
+  return PALETTE[hash % PALETTE.length];
+}
+
+module.exports = { PALETTE, colorFor };
