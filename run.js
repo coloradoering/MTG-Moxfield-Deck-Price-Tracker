@@ -1,121 +1,177 @@
+/**
+ * Take one price snapshot of every deck owned by a Moxfield user.
+ *
+ * Usage:
+ *   node run.js                 # uses MOXFIELD_USER from env
+ *   node run.js --user name     # explicit
+ *   node run.js --all-formats   # include non-commander decks
+ *
+ * Requires an already-running Chrome with remote debugging, logged into
+ * Moxfield. Set CHROME_URL if it is not on localhost:9222. See README for why:
+ * the API sits behind Cloudflare and rejects non-browser TLS fingerprints.
+ */
+
 const puppeteer = require('puppeteer');
 const { MongoClient } = require('mongodb');
+const api = require('./moxfield-api');
 
 const MONGO_URL = process.env.MONGO_URL || 'mongodb://localhost:27017';
-const DB_NAME = 'moxfield_tracker';
+const DB_NAME = process.env.DB_NAME || 'moxfield_tracker';
+const CHROME_URL = process.env.CHROME_URL || 'http://localhost:9222';
 
-const decks = require('./decks');
-
-async function getCommanderImages(page) {
-    return await page.evaluate(async () => {
-        // Strategy 1: hashes from the Commander <ul>
-        let hashes = [];
-        for (const ul of document.querySelectorAll('ul')) {
-            if (!ul.querySelector('li a span[title="Commander"]')) continue;
-            hashes = [...ul.querySelectorAll('li[data-hash]')]
-                .map(li => li.getAttribute('data-hash'))
-                .filter(Boolean);
-            break;
-        }
-
-        // Map hash -> real rendered src (handles card-XXXXX and card-face-XXXXX)
-        const srcByHash = {};
-        for (const img of document.querySelectorAll('.deckview-image-wrapper img.img-card.front')) {
-            if (!img.src) continue;
-            const m = img.src.match(/card-(?:face-)?([A-Za-z0-9]+)-normal/);
-            if (m && !srcByHash[m[1]]) srcByHash[m[1]] = img.src;
-        }
-
-        if (hashes.length > 0) {
-            // For each hash: prefer the real src, fall back to trying both URL forms
-            const out = [];
-            for (const h of hashes) {
-                if (srcByHash[h]) { out.push(srcByHash[h]); continue; }
-
-                const normal = `https://assets.moxfield.net/cards/card-${h}-normal.webp`;
-                const face = `https://assets.moxfield.net/cards/card-face-${h}-normal.webp`;
-
-                const [normalOk, faceOk] = await Promise.all([
-                    fetch(normal, { method: 'HEAD' }).then(r => r.ok).catch(() => false),
-                    fetch(face, { method: 'HEAD' }).then(r => r.ok).catch(() => false),
-                ]);
-
-                if (normalOk) out.push(normal);
-                else if (faceOk) out.push(face);
-            }
-            if (out.length > 0) return out;
-        }
-
-        // Strategy 2: no Commander <ul>, use deck header image
-        const front = document.querySelector('.deckview-image-wrapper img.img-card.front');
-        if (front && front.src) return [front.src];
-
-        return [];
-    });
+function parseArgs(argv) {
+  const opts = { user: process.env.MOXFIELD_USER || null, allFormats: false };
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--user' || a === '-u') opts.user = argv[++i];
+    else if (a === '--all-formats') opts.allFormats = true;
+  }
+  return opts;
 }
+
+function localTimestamp(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return (
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+    `${p(d.getHours())}:${p(d.getMinutes())}`
+  );
+}
+
 (async () => {
-    console.log("🔌 Connecting to Chrome...");
-    const browser = await puppeteer.connect({
-        browserURL: 'http://localhost:9222',
-        defaultViewport: null
+  const opts = parseArgs(process.argv.slice(2));
+
+  if (!opts.user) {
+    console.error(
+      'No username given.\n' +
+        '  Set MOXFIELD_USER=yourname, or pass --user yourname\n' +
+        'Your Moxfield username is the last part of https://moxfield.com/users/<name>'
+    );
+    process.exit(1);
+  }
+
+  console.log(`Connecting to Chrome at ${CHROME_URL}...`);
+  let browser;
+  try {
+    browser = await puppeteer.connect({
+      browserURL: CHROME_URL,
+      defaultViewport: null,
     });
+  } catch (err) {
+    console.error(
+      `Could not reach Chrome at ${CHROME_URL}.\n` +
+        'Start it with remote debugging (see README), log into Moxfield, then retry.\n' +
+        `Underlying error: ${err.message}`
+    );
+    process.exit(1);
+  }
 
-    const now = new Date();
-    const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const runData = { date: timestamp, prices: {}, images: {} };
+  const pages = await browser.pages();
+  let page = pages.find((p) => p.url().includes('moxfield.com'));
 
-    for (const deck of decks) {
-        let page = null;
-        try {
-            console.log(`Checking: ${deck.name}...`);
+  if (!page) {
+    page = await browser.newPage();
+    console.log('Opening moxfield.com to establish session...');
+    await page.goto('https://moxfield.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+  } else {
+    console.log(`Reusing existing tab: ${page.url()}`);
+  }
 
-            // Always grab a fresh page reference
-            const pages = await browser.pages();
-            page = pages.find(p => p.url().includes('moxfield.com')) || pages[0];
-            if (!page) page = await browser.newPage();
-
-            await page.goto(deck.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-            await page.waitForSelector('#shoppingcart', { timeout: 15000 });
-            await new Promise(r => setTimeout(r, 1000));
-
-            const marketValue = await page.$eval('#shoppingcart', el => {
-                const text = el.innerText;
-                const match = text.match(/\$[\d,]+\.\d{2}/);
-                return match ? match[0].replace('$', '').replace(/,/g, '') : "0.00";
-            });
-
-            runData.prices[deck.name] = parseFloat(marketValue);
-            console.log(`   -> $${marketValue}`);
-
-            // Re-acquire page AGAIN before image scrape — Moxfield may have redirected
-            const pagesAfter = await browser.pages();
-            const freshPage = pagesAfter.find(p => p.url().includes(deck.url.split('/decks/')[1])) || pagesAfter[0];
-
-            const imageUrls = await getCommanderImages(freshPage);
-            if (imageUrls.length > 0) {
-                runData.images[deck.name] = imageUrls;
-                console.log(`   🎨 ${imageUrls.length} commander image${imageUrls.length > 1 ? 's' : ''} found`);
-            } else {
-                console.log(`   ⚠️ No commander images`);
-            }
-        } catch (err) {
-            console.log(`   ❌ Error on ${deck.name}: ${err.message}`);
-            runData.prices[deck.name] = 0.00;
-        }
-
-        // Don't hold onto the page — it may be dead next iteration
-        page = null;
-        await new Promise(r => setTimeout(r, 1000));
-    }
-
+  // Moxfield exposes no session endpoint (verified: every plausible path returns
+  // 404), so there is nothing to probe for login state. What actually matters is
+  // whether the API is reachable from this page at all — a Cloudflare block shows
+  // up here first, and failing early is much clearer than twenty confusing errors.
+  console.log('\nChecking Moxfield API reachability...');
+  try {
+    await api.apiGetInPage(page, '/v2/decks/search-sfw?pageSize=1');
+    console.log('API reachable.');
+  } catch (err) {
+    console.error(
+      `Cannot reach the Moxfield API from this browser: ${err.message}\n` +
+        'This usually means Cloudflare is blocking the request. Make sure Chrome is\n' +
+        'running with a visible window (not headless) and that moxfield.com loads\n' +
+        'normally when you open it manually.'
+    );
     await browser.disconnect();
+    process.exit(1);
+  }
 
-    console.log("\n🍃 Saving to MongoDB...");
-    const client = new MongoClient(MONGO_URL);
+  console.log(`\nFetching decks for "${opts.user}"...`);
+  let decks;
+  try {
+    decks = await api.fetchUserDecks(page, opts.user);
+  } catch (err) {
+    console.error(`Deck discovery failed: ${err.message}`);
+    await browser.disconnect();
+    process.exit(1);
+  }
+
+  console.log(`Found ${decks.length} decks.`);
+
+  const selected = opts.allFormats
+    ? decks
+    : decks.filter((d) => d.format === 'commander');
+  console.log(`Pricing ${selected.length}${opts.allFormats ? '' : ' commander'} decks.\n`);
+
+  const runData = {
+    date: localTimestamp(),
+    user: opts.user,
+    prices: {},
+    images: {},
+    deckIds: {},
+    formats: {},
+    missing: {},
+  };
+
+  for (const d of selected) {
+    try {
+      const deck = await api.fetchDeck(page, d.publicId);
+      const value = api.deckValue(deck);
+
+      runData.prices[d.name] = value;
+      runData.deckIds[d.name] = d.publicId;
+      runData.formats[d.name] = d.format;
+
+      const images = await api.commanderImages(page, deck);
+      if (images.length > 0) runData.images[d.name] = images;
+
+      const cardCount = Object.keys(deck.mainboard || {}).length;
+      console.log(
+        `  ${d.name.slice(0, 40).padEnd(40)} $${value.toFixed(2).padStart(9)}` +
+          `  (${cardCount} cards, ${images.length} img)`
+      );
+    } catch (err) {
+      // Record the failure explicitly instead of silently writing 0.00.
+      // A zero would be indistinguishable from a deck that is genuinely worthless.
+      runData.missing[d.name] = err.message;
+      console.log(`  ${d.name.slice(0, 40).padEnd(40)} FAILED: ${err.message}`);
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+
+  await browser.disconnect();
+
+  const priced = Object.keys(runData.prices).length;
+  const failed = Object.keys(runData.missing).length;
+
+  if (priced === 0) {
+    console.error('\nNo decks were priced. Nothing written to MongoDB.');
+    process.exit(1);
+  }
+
+  console.log(`\nSaving snapshot: ${priced} priced, ${failed} failed...`);
+  const client = new MongoClient(MONGO_URL);
+  try {
     await client.connect();
     const db = client.db(DB_NAME);
-    await db.collection('price_logs').insertOne(runData);
+    const result = await db.collection('price_logs').insertOne(runData);
+    console.log(`Saved as ${result.insertedId}.`);
+  } catch (err) {
+    console.error(`MongoDB write failed: ${err.message}`);
+    process.exitCode = 1;
+  } finally {
     await client.close();
-
-    console.log("✅ Done!");
-})();
+  }
+})().catch((err) => {
+  console.error(`Unexpected failure: ${err.message}`);
+  process.exit(1);
+});

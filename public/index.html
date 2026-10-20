@@ -471,8 +471,17 @@
 
         function renderChart() {
             const dates = allHistory.map(h => h.date);
+
+            // Union of every deck across all snapshots, so a deck that was removed
+            // from the collection still shows its history rather than vanishing.
             const latest = allHistory[allHistory.length - 1];
-            const deckNames = Object.keys(latest.prices).filter(n => latest.prices[n] > 0);
+            const nameSet = new Set();
+            for (const snap of allHistory) {
+                for (const [name, v] of Object.entries(snap.prices || {})) {
+                    if (v > 0) nameSet.add(name);
+                }
+            }
+            const deckNames = [...nameSet];
 
             const fallbackColors = [
                 '#f43f5e', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6',
@@ -488,7 +497,7 @@
                     const color = info ? info.color : fallbackColors[i % fallbackColors.length];
                     return {
                         label: name,
-                        data: allHistory.map(h => h.prices[name] || null),
+                        data: allHistory.map(h => h.prices[name] ?? null),
                         borderColor: color,
                         backgroundColor: color + '20',
                         tension: 0.15,

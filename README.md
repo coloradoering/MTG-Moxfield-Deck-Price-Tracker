@@ -1,36 +1,60 @@
 # MTG Moxfield Deck Price Tracker
 
-Tracks the market value of a portfolio of Magic: The Gathering Commander decks over time, and visualizes the price history in a local dashboard.
+Tracks the market value of every deck in a Magic: The Gathering [Moxfield](https://moxfield.com) collection over time, and visualizes the history in a local dashboard.
 
-Prices are read from the `#shoppingcart` element on each deck's public [Moxfield](https://moxfield.com) page. Snapshots are stored in MongoDB and charted with Chart.js.
+Deck selection is **automatic**: point it at a username and it discovers and prices the whole collection. There is no hardcoded deck list to maintain. Snapshots are stored in MongoDB and charted with Chart.js.
 
 ---
 
 ## How it works
 
 ```
-Moxfield deck pages
-        │
-        │  scrape (Puppeteer, or requests+BeautifulSoup)
-        ▼
-   price snapshot  ──►  MongoDB (moxfield_tracker.price_logs)
-                              │
-                              │  Express API
-                              ▼
-                     Dashboard (Chart.js)
+Moxfield API  ──►  deck discovery (all decks for a user)
+      │
+      │  per-deck fetch, prices computed from card data
+      ▼
+ price snapshot  ──►  MongoDB (moxfield_tracker.price_logs)
+                            │
+                            │  Express API
+                            ▼
+                   Dashboard (Chart.js)
 ```
+
+All Moxfield requests are made **from inside your own Chrome session** via Puppeteer. This is not incidental — see *Why a browser is required* below.
 
 A *snapshot* is one document per scrape run:
 
 ```json
 {
-  "date": "2026-10-20 13:45",
-  "prices": { "deck name": 438.52, "another deck": 315.27 },
-  "images": { "deck name": ["https://assets.moxfield.net/cards/card-…-normal.webp"] }
+  "date": "2026-10-20 14:47",
+  "user": "yourname",
+  "prices": { "deck name": 90.73 },
+  "images": { "deck name": ["https://assets.moxfield.net/cards/card-…-normal.webp"] },
+  "deckIds": { "deck name": "publicId" },
+  "formats": { "deck name": "commander" },
+  "missing": {}
 }
 ```
 
-Deck names are joined against the snapshot `prices` keys to render cards and chart lines.
+---
+
+## Why a browser is required
+
+Moxfield sits behind Cloudflare, which rejects programmatic clients on **TLS fingerprint** rather than headers. Measured against the live API:
+
+| Client | Result |
+|---|---|
+| `curl` (HTTP/1.1) | 200 |
+| `curl` (HTTP/2) | 200 |
+| Node `fetch` | 403 |
+| Node `https` | 403 |
+| Node with spoofed browser headers | 403 |
+| Headless Chrome | 403 |
+| Visible Chrome | 200 |
+
+So no header tweaking helps, and headless mode defeats the purpose. Every request therefore runs inside a real, visible, logged-in Chrome via `page.evaluate`. That browser does the TLS handshake and carries the cookies; the app just reads the results.
+
+This also explains the project's shape: it is a companion to your browser session, not a standalone server-side scraper.
 
 ---
 
@@ -38,14 +62,15 @@ Deck names are joined against the snapshot `prices` keys to render cards and cha
 
 | File | Role |
 |---|---|
-| `decks.js` | **Source of truth** for which decks are tracked (name + Moxfield URL). |
-| `run.js` | Primary scraper. Connects to a Chrome instance over the DevTools protocol, visits each deck, extracts the price and commander art, writes one snapshot to MongoDB. |
-| `server.js` | Express server. Serves the dashboard and a small JSON API. Port `3000`. |
+| `moxfield-api.js` | All Moxfield access: deck discovery, per-deck fetch, value computation, commander art. Runs every request inside the page. |
+| `run.js` | Scrape entry point. Connects to Chrome, resolves your collection, prices each deck, writes one snapshot to MongoDB. |
+| `decks.js` | Chart colours only. Deck selection is no longer configured here — set `MOXFIELD_USER` instead. |
+| `server.js` | Express server. Serves the dashboard and a small JSON API. Port `3000` (override with `PORT`). |
 | `public/index.html` | Dashboard UI — stat cards, Chart.js line chart, per-deck cards with prices and day-over-day change, deck preview modal. |
-| `tracker.py` | Alternative scraper. Pure `requests` + BeautifulSoup, no browser. Writes to **Google Sheets** instead of MongoDB. |
-| `buh.js` | Seed script — inserts **fake** historical data so the dashboard has something to render. |
+| `buh.js` | Seed script — inserts **fake** historical data so the dashboard has something to render. Destructive. |
 | `scrub.js` | Deletes all snapshots for the current date, so you can re-run a scrape cleanly. |
 | `start-chrome.bat` | Windows helper that launches Chrome with remote debugging on port `9222`. |
+| `tracker.py` | Legacy Python scraper writing to Google Sheets. Not used by the app; kept for reference. |
 | `moxfield_history.json`, `moxfield_prices_2026-08-11.csv` | Leftover data exports. Nothing in the app reads them. |
 
 ---
@@ -103,21 +128,40 @@ npm install
 
 ### 4. Take a snapshot
 
+Tell it whose collection to track. Either set the environment variable or pass the flag:
+
 ```bash
-npm run scrape     # runs run.js
+MOXFIELD_USER=yourname npm run scrape
+# or
+npm run scrape -- --user yourname
 ```
 
-You'll see per-deck progress:
+Your username is the last part of your profile URL: `https://moxfield.com/users/<name>`.
+
+Each run discovers **every deck you own** and keeps the Commander ones. Add `--all-formats` to price everything.
+
+Output looks like:
 
 ```
-🔌 Connecting to Chrome...
-Checking: villain kindred...
-   -> $438.52
-   🎨 1 commander image found
-...
-🍃 Saving to MongoDB...
-✅ Done!
+Connecting to Chrome at http://localhost:9222...
+Reusing existing tab: https://moxfield.com/
+
+Checking Moxfield API reachability...
+API reachable.
+
+Fetching decks for "yourname"...
+Found 25 decks.
+Pricing 19 commander decks.
+
+  samurai greg            $   122.08  (71 cards, 1 img)
+  shakira shakira         $   221.27  (80 cards, 1 img)
+  ...
+
+Saving snapshot: 19 priced, 0 failed...
+Saved as ObjectId('...').
 ```
+
+A deck that fails is listed under `missing` in the snapshot and reported in the output — it is **not** recorded as `$0.00`.
 
 ### 5. Start the dashboard
 
@@ -145,44 +189,46 @@ The server opens and closes a MongoDB connection per request. Fine for a local s
 
 ## Configuration
 
-Most things are hardcoded and will need editing to reuse this for your own collection.
+Everything is environment-driven; no source edits needed.
 
-**Tracked decks** — edit `decks.js`:
+| Variable | Default | Used by |
+|---|---|---|
+| `MOXFIELD_USER` | *(required)* | `run.js` — whose collection to track |
+| `MONGO_URL` | `mongodb://localhost:27017` | all scripts |
+| `DB_NAME` | `moxfield_tracker` | all scripts |
+| `CHROME_URL` | `http://localhost:9222` | `run.js` |
+| `PORT` | `3000` | `server.js` |
 
-```js
-{ name: "my deck", url: "https://moxfield.com/decks/DECK_ID" }
-```
+`run.js` also accepts `--user <name>` and `--all-formats`. The flag wins over `MOXFIELD_USER`.
 
-The `name` is the join key across the database, the chart legend, and the UI. Renaming a deck starts it as a brand-new series; historical snapshots keep the old name.
-
-**Config precedence:** only `run.js` reads `MONGO_URL` from the environment. `server.js`, `buh.js`, and `scrub.js` hardcode `mongodb://localhost:27017` — see *Known rough edges*.
-
-**Port** — `3000`, hardcoded in `server.js`.
+**Deck names are the join key.** They link the database, the chart legend, and the UI. Renaming a deck on Moxfield starts it as a new series; historical snapshots keep the old name and the chart treats them as separate decks. Prices are not carried across a rename.
 
 ---
 
 ## Design notes and gotchas
 
-**Prices come from page scraping, not an API.** `#shoppingcart` holds the deck's current market value as rendered by Moxfield's frontend. If Moxfield changes that markup, the scraper silently records `0.00`. An API-based path was explored and abandoned: the v2 API doesn't expose the same aggregate value (it's per-card), so scraping the rendered total stayed.
+**Values are computed from card prices, not read off the page.** Each deck's total is the sum of `prices.usd` (or `usd_foil` for foils) across the mainboard plus the commander, with basic lands excluded — matching how the deck page reports it. Cross-checked against recorded history: a deck the chart shows at $86.61 computes to $90.73, and one at $1054.17 computes to $1045.24. Those gaps are real card-price drift, not error.
 
-**A failed scrape is recorded as `0.00`, not skipped.** In `run.js`, a caught error writes `runData.prices[deck.name] = 0.00`. That keeps decks aligned across snapshots but means failures and genuinely-zero decks are indistinguishable in the data. The dashboard filters `v > 0`, so those points simply vanish from the chart rather than showing as a dip to zero.
+**A deck that fails is recorded under `missing`, not as `$0.00`.** Writing a zero would make a broken scrape indistinguishable from a worthless deck. Failures appear in the console and in the snapshot; that deck simply has no point for that run.
+
+**The deck list is whatever you currently own.** Adding, deleting, or renaming a deck changes the next snapshot. The chart unions deck names across all snapshots, so a deck you stop tracking keeps its history instead of disappearing.
 
 **`buh.js` writes fake data.** It clears `price_logs` and inserts five backdated snapshots with randomised values around a hardcoded set of prices. Never run it against a database you care about.
 
 **Tracking is per-deck, not per-card.** You get the portfolio total over time, not which card moved.
 
+**The API is undocumented.** `api2.moxfield.com` is what Moxfield's own web client calls; it can change without notice. If discovery breaks, `moxfield-api.js` is where to look. Note that only the `authorUserNames` filter works — `userName`, `author`, and `createdByUser` are silently ignored and return the entire site, which is why the code rejects any `totalResults` of 10000.
+
 ---
 
 ## Status
 
-Personal project. No tests, no CI, no README until now. `node_modules/` is committed, `.gitignore` only covers `credentials.json` and `*.json.bak`.
+Working tool, no tests, no CI. `node_modules/` is committed, `.gitignore` covers only `credentials.json` and `*.json.bak`.
 
 Known rough edges:
 
-- `tracker.py` and `decks.js` disagree on which decks exist — Python tracks 10, JS tracks 14. `tracker.py` also writes to Google Sheets rather than MongoDB, so the two paths don't share storage.
-- `server.js` hardcodes the Mongo URL while `run.js` reads `MONGO_URL`. Moving the database off `localhost` requires editing both.
+- `tracker.py` is legacy: it writes to Google Sheets, not MongoDB, and is unrelated to the current pipeline.
 - `buh.js` is named as if it were a utility; it's a destructive seed script that clears `price_logs`.
-- `GET /api/latest` in `server.js` is implemented but never called — the UI derives the latest snapshot client-side from `/api/history`.
-- `run.js` carries a vestigial `page` variable that is assigned and then nulled each iteration; the real work uses a separately acquired `freshPage`.
-
-Treat this as a working tool that needs cleanup before it's a general-purpose one.
+- `GET /api/latest` is implemented but never called — the UI derives the latest snapshot client-side from `/api/history`.
+- Headless Chrome does not work. The browser must be visible, so on a server you need Xvfb or similar.
+- Verified on Chrome 155 / Node 22. Puppeteer 22 bundles Chrome 127, which is untested against Moxfield's current Cloudflare config.
