@@ -27,7 +27,9 @@
         h1 { color: #38bdf8; font-size: 1.5rem; font-weight: 600; }
         .subtitle { color: #64748b; font-size: 0.85rem; }
 
-        .toolbar { display: flex; gap: 8px; align-items: center; }
+        .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .vendor-label { font-size: 0.75rem; color: #64748b; text-transform: uppercase;
+            letter-spacing: 0.04em; margin-right: -2px; }
         .vendor-select { padding-right: 28px; appearance: none; -webkit-appearance: none;
             background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M0 0l5 6 5-6z' fill='%2394a3b8'/></svg>");
             background-repeat: no-repeat; background-position: right 10px center; }
@@ -248,7 +250,8 @@
                 <p class="subtitle" id="lastUpdated"></p>
             </div>
             <div class="toolbar">
-                <select class="btn vendor-select" id="vendorSelect" onchange="onVendorChange()" title="Price source">
+                <label class="vendor-label" for="vendorSelect">Price source</label>
+                <select class="btn vendor-select" id="vendorSelect" onchange="onVendorChange()">
                     <option value="tcgplayer">TCGplayer</option>
                 </select>
                 <button class="btn" onclick="toggleAll()" id="toggleAllBtn">Hide All</button>
@@ -324,11 +327,13 @@
             try {
                 const [historyRes, decksRes] = await Promise.all([
                     fetch(`/api/history?vendor=${encodeURIComponent(vendor)}`),
-                    fetch('/api/decks')
+                    fetch(`/api/decks?vendor=${encodeURIComponent(vendor)}`)
                 ]);
 
                 allHistory = await historyRes.json();
-                allDecks = await decksRes.json();
+                const deckBody = await decksRes.json();
+                allDecks = Array.isArray(deckBody) ? deckBody : deckBody.decks || [];
+                const deckSource = deckBody.source || 'registry';
 
                 if (allHistory.length === 0) {
                     document.getElementById('lastUpdated').textContent = 'No data yet. Run the scraper first.';
@@ -339,8 +344,11 @@
                 const previous = allHistory.length > 1 ? allHistory[allHistory.length - 2] : null;
 
                 const label = vendors.find((v) => v.key === vendor)?.label || vendor;
-                document.getElementById('lastUpdated').textContent =
-                    `Last updated: ${latest.date} — priced via ${label}`;
+                let note = `Last updated: ${latest.date} — priced via ${label}`;
+                if (deckSource === 'price_logs') {
+                    note += ' · deck list from last snapshot (run the scraper to build the registry)';
+                }
+                document.getElementById('lastUpdated').textContent = note;
 
                 renderStats(latest, previous);
                 renderDeckCards(latest, previous);

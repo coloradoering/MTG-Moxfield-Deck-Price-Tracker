@@ -9,7 +9,15 @@ const PORT = Number(process.env.PORT) || 3000;
 const MONGO_URL = process.env.MONGO_URL || 'mongodb://localhost:27017';
 const DB_NAME = process.env.DB_NAME || 'moxfield_tracker';
 
-app.use(express.static('public'));
+// Static assets, with no-cache on HTML so a code change is never masked by a
+// stale page in the browser. Everything else can cache normally.
+app.use(
+  express.static('public', {
+    setHeaders: (res, path) => {
+      if (path.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+    },
+  })
+);
 
 /** Mongo used to be opened and closed inline in every handler. */
 async function withDb(fn) {
@@ -99,29 +107,52 @@ app.get('/api/vendors', (req, res) => {
 app.get('/api/decks', async (req, res) => {
   try {
     const user = req.query.user || null;
-    const { decks, latest } = await withDb(async (db) => {
+    const vendor = resolveVendor(req.query.vendor);
+
+    const { decks, latest, fallback } = await withDb(async (db) => {
       const users = user ? [user] : await registry.listUsers(db);
       const all = [];
       for (const u of users) {
         all.push(...(await registry.listDecks(db, u)));
       }
       const snap = await db.collection('price_logs').findOne({}, { sort: { date: -1 } });
-      return { decks: all, latest: snap };
+
+      // The registry is populated by the scraper. If someone upgrades the code
+      // without re-scraping, it is empty and the dashboard would show nothing at
+      // all despite having a full price history. Degrade instead of going blank.
+      if (all.length === 0 && snap) {
+        const names = new Set([
+          ...Object.keys(pricesForVendor(snap, vendor)),
+          ...Object.keys(snap.prices || {}),
+        ]);
+        const derived = [...names].map((name) => ({
+          name,
+          user: snap.user || null,
+          publicId: snap.deckIds?.[name] || null,
+          format: snap.formats?.[name] || null,
+          active: true,
+        }));
+        return { decks: derived, latest: snap, fallback: true };
+      }
+
+      return { decks: all, latest: snap, fallback: false };
     });
 
-    res.json(
-      decks.map((d) => ({
+    res.json({
+      decks: decks.map((d) => ({
         name: d.name,
         user: d.user,
         publicId: d.publicId,
         format: d.format,
         color: colorFor(d.name),
-        url: `https://moxfield.com/decks/${d.publicId}`,
+        url: d.publicId ? `https://moxfield.com/decks/${d.publicId}` : null,
         image: latest?.images?.[d.name]?.[0] || null,
-      }))
-    );
+      })),
+      source: fallback ? 'price_logs' : 'registry',
+      vendor,
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 
