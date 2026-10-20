@@ -132,8 +132,15 @@ app.post('/api/user', async (req, res) => {
 app.get('/api/history', async (req, res) => {
   try {
     const vendor = api.resolveVendor(req.query.vendor);
+    // Snapshots are per-user. Without this filter every tracked user's history is
+    // merged into one chart, and decks owned by two people blend into a single line.
+    const tracked = req.query.user || (await withDb(currentUser));
     const history = await withDb((db) =>
-      db.collection('price_logs').find().sort({ date: 1 }).toArray()
+      db
+        .collection('price_logs')
+        .find(tracked ? { user: tracked } : {})
+        .sort({ date: 1 })
+        .toArray()
     );
     res.json(
       history.map((snap) => ({
@@ -152,8 +159,9 @@ app.get('/api/history', async (req, res) => {
 app.get('/api/latest', async (req, res) => {
   try {
     const vendor = api.resolveVendor(req.query.vendor);
+    const tracked = req.query.user || (await withDb(currentUser));
     const latest = await withDb((db) =>
-      db.collection('price_logs').findOne({}, { sort: { date: -1 } })
+      db.collection('price_logs').findOne(tracked ? { user: tracked } : {}, { sort: { date: -1 } })
     );
     if (!latest) return res.json(null);
     res.json({
@@ -190,7 +198,9 @@ app.get('/api/decks', async (req, res) => {
       for (const u of users) {
         all.push(...(await registry.listDecks(db, u)));
       }
-      const snap = await db.collection('price_logs').findOne({}, { sort: { date: -1 } });
+      const snap = await db
+        .collection('price_logs')
+        .findOne(tracked ? { user: tracked } : {}, { sort: { date: -1 } });
 
       // The registry is populated by the scraper. If someone upgrades the code
       // without re-scraping it is empty, and the dashboard would show nothing at
