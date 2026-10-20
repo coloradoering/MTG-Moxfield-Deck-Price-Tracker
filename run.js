@@ -81,7 +81,11 @@ function localTimestamp(d = new Date()) {
   }
 
   const pages = await browser.pages();
-  let page = pages.find((p) => p.url().includes('moxfield.com'));
+  // Never reuse a tab sitting on the API host — the fetch has to run from the
+  // site origin, or it is cross-origin and answers with the public-use notice.
+  let page = pages.find(
+    (p) => p.url().includes('moxfield.com') && !p.url().includes('api2.moxfield.com')
+  );
 
   if (!page) {
     page = await browser.newPage();

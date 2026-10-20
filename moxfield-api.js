@@ -247,6 +247,36 @@ const CHROME_URL_DEFAULT = process.env.CHROME_URL || 'http://localhost:9222';
  * helpers need same-origin fetch, so we cannot just call the API from Node),
  * and disconnects without closing the browser.
  */
+const SITE_ORIGIN = 'https://moxfield.com';
+
+/**
+ * Find a page already on a moxfield.com origin, or open one.
+ *
+ * The API fetch has to run from the site's own origin: it relies on the site's
+ * cookies and on the request being same-site with the session. Navigating to the
+ * API host itself (api2.moxfield.com) puts the page on the API's own origin,
+ * where the request is cross-origin, unauthenticated, and answers with the
+ * "not intended for public use" notice. Always start from the site.
+ */
+async function getSitePage(browser) {
+  const pages = await browser.pages();
+  const existing = pages.find(
+    (p) => p.url().includes('moxfield.com') && !p.url().includes('api2.moxfield.com')
+  );
+  if (existing) return existing;
+
+  const page = await browser.newPage();
+  try {
+    await page.goto(SITE_ORIGIN, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  } catch (err) {
+    throw new Error(
+      `Opened a tab at ${SITE_ORIGIN} but it did not load (${err.message}). ` +
+        'Check the browser window — it may be showing a Cloudflare challenge or be offline.'
+    );
+  }
+  return page;
+}
+
 async function discoverDecks(userName, { chromeUrl = CHROME_URL_DEFAULT } = {}) {
   const puppeteer = require('puppeteer');
   let browser;
@@ -260,12 +290,7 @@ async function discoverDecks(userName, { chromeUrl = CHROME_URL_DEFAULT } = {}) 
   }
 
   try {
-    const pages = await browser.pages();
-    let page = pages.find((p) => p.url().includes('moxfield.com'));
-    if (!page) {
-      page = await browser.newPage();
-      await page.goto(`${API_BASE}/`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    }
+    const page = await getSitePage(browser);
     return await fetchUserDecks(page, userName);
   } finally {
     await browser.disconnect();
