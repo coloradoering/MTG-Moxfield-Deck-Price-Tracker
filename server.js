@@ -57,7 +57,14 @@ function pricesForVendor(snapshot, vendor) {
   return snapVendor === vendor ? snapshot.prices || {} : {};
 }
 
-/** Which Moxfield user this install tracks, if any. */
+/**
+ * Which Moxfield user this install tracks, if any.
+ *
+ * The UI is authoritative. MOXFIELD_USER used to be consulted first, which meant
+ * a stale value in the shell silently overrode the username set in the dashboard —
+ * you would track one user and price another. It is now only a seed for a fresh
+ * install that has never chosen a user in the UI.
+ */
 async function currentUser(db) {
   const pref = await db.collection('settings').findOne({ _id: 'prefs' });
   return pref?.moxfieldUser || DEFAULT_USER || null;
@@ -271,12 +278,22 @@ app.post('/api/scrub', async (req, res) => {
  * Deliberately shells out to run.js rather than importing it: run.js drives a
  * real browser and calls process.exit, and a failed scrape should never take the
  * dashboard down with it.
+ *
+ * The tracked username is passed explicitly. run.js otherwise falls back to
+ * MOXFIELD_USER from the environment, which is whatever the shell happened to
+ * have — meaning the dashboard would silently price a different user than the one
+ * being tracked.
  */
-function runScrape(onProgress) {
+async function runScrape(onProgress) {
+  const user = await withDb(currentUser);
+  if (!user) {
+    throw new Error('No Moxfield username is being tracked. Enter one and press Track.');
+  }
+
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['run.js'], {
+    const child = spawn(process.execPath, ['run.js', '--user', user], {
       cwd: __dirname,
-      env: process.env,
+      env: { ...process.env, MOXFIELD_USER: user },
     });
     let out = '';
     child.stdout.on('data', (b) => {
@@ -291,7 +308,7 @@ function runScrape(onProgress) {
       if (code !== 0) return reject(new Error(out.trim().split('\n').slice(-4).join(' ')));
       const m = out.match(/Saved as (.+?)\./);
       const priced = out.match(/(\d+) priced/);
-      resolve({ date: m ? m[1] : null, decks: priced ? Number(priced[1]) : null });
+      resolve({ date: m ? m[1] : null, decks: priced ? Number(priced[1]) : null, user });
     });
   });
 }
