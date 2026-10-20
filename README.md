@@ -41,11 +41,8 @@ Deck names are joined against the snapshot `prices` keys to render cards and cha
 | `decks.js` | **Source of truth** for which decks are tracked (name + Moxfield URL). |
 | `run.js` | Primary scraper. Connects to a Chrome instance over the DevTools protocol, visits each deck, extracts the price and commander art, writes one snapshot to MongoDB. |
 | `server.js` | Express server. Serves the dashboard and a small JSON API. Port `3000`. |
-| `public/index.html` | Main dashboard UI — stat cards, Chart.js line chart, per-deck cards with prices and day-over-day change, deck preview modal. |
-| `dashboard.html` | Static chart. Chart data is **hardcoded** — a snapshot export, not live. |
-| `debug.html` | Saved Moxfield page used for reverse-engineering selectors. Not part of the app. |
+| `public/index.html` | Dashboard UI — stat cards, Chart.js line chart, per-deck cards with prices and day-over-day change, deck preview modal. |
 | `tracker.py` | Alternative scraper. Pure `requests` + BeautifulSoup, no browser. Writes to **Google Sheets** instead of MongoDB. |
-| `check_price.py` | Throwaway probe for the Moxfield v2 API shape. |
 | `buh.js` | Seed script — inserts **fake** historical data so the dashboard has something to render. |
 | `scrub.js` | Deletes all snapshots for the current date, so you can re-run a scrape cleanly. |
 | `start-chrome.bat` | Windows helper that launches Chrome with remote debugging on port `9222`. |
@@ -155,13 +152,11 @@ The `name` is the join key across the database, the chart legend, and the UI. Re
 
 ## Design notes and gotchas
 
-**Prices come from page scraping, not an API.** `#shoppingcart` holds the deck's current market value as rendered by Moxfield's frontend. If Moxfield changes that markup, the scraper silently records `0.00`. `check_price.py` exists because someone went looking for a cleaner API-based path — the v2 API doesn't expose the same aggregate value (it's per-card), so scraping the rendered total stayed.
+**Prices come from page scraping, not an API.** `#shoppingcart` holds the deck's current market value as rendered by Moxfield's frontend. If Moxfield changes that markup, the scraper silently records `0.00`. An API-based path was explored and abandoned: the v2 API doesn't expose the same aggregate value (it's per-card), so scraping the rendered total stayed.
 
 **A failed scrape is recorded as `0.00`, not skipped.** In `run.js`, a caught error writes `runData.prices[deck.name] = 0.00`. That keeps decks aligned across snapshots but means failures and genuinely-zero decks are indistinguishable in the data. The dashboard filters `v > 0`, so those points simply vanish from the chart rather than showing as a dip to zero.
 
 **`buh.js` writes fake data.** It clears `price_logs` and inserts five backdated snapshots with randomised values around a hardcoded set of prices. Never run it against a database you care about.
-
-**`dashboard.html` is a frozen export.** Its chart series are literal arrays pasted into the HTML. `public/index.html` is the live one. Don't confuse them.
 
 **Tracking is per-deck, not per-card.** You get the portfolio total over time, not which card moved.
 
@@ -174,7 +169,8 @@ Personal project. No tests, no CI, no README until now. `node_modules/` is commi
 Known rough edges:
 
 - `tracker.py` and `decks.js` disagree on which decks exist — Python tracks 10, JS tracks 14. `tracker.py` also writes to Google Sheets rather than MongoDB, so the two paths don't share storage.
-- `debug.html` is a saved copy of someone else's Moxfield profile page, committed by accident as far as the history suggests.
 - `buh.js` is named as if it were a utility; it's a destructive seed script.
+- `GET /api/latest` in `server.js` is implemented but never called — the UI derives the latest snapshot client-side from `/api/history`.
+- `run.js` carries a vestigial `page` variable that is assigned and then nulled each iteration; the real work uses a separately acquired `freshPage`.
 
 Treat this as a working tool that needs cleanup before it's a general-purpose one.
