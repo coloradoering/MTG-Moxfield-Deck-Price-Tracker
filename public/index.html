@@ -271,15 +271,15 @@
                     <option value="tcgplayer">TCGplayer</option>
                 </select>
                 <button class="btn" onclick="toggleAll()" id="toggleAllBtn">Hide All</button>
-                <button class="btn primary" onclick="loadData()">🔄 Refresh</button>
+                <button class="btn" onclick="loadData()" title="Re-read the data already in the database">🔄 Reload</button>
             </div>
         </header>
 
         <div class="track-user">
             <label for="usernameInput">Moxfield username</label>
             <input type="text" id="usernameInput" placeholder="e.g. CorbanMonoxide" autocomplete="off" spellcheck="false">
-            <button class="btn primary" id="trackBtn" onclick="applyUser()">Track &amp; Price</button>
-            <button class="btn ghost" id="scrapeBtn" onclick="runScrape()" title="Re-price the decks already being tracked">↻ Refresh prices</button>
+            <button class="btn primary" id="trackBtn" onclick="searchUser()">Search</button>
+            <button class="btn ghost" id="scrapeBtn" onclick="runScrape()" title="Check for Chrome, start it if needed, then re-price the tracked decks">↻ Refresh prices</button>
             <span class="track-status" id="trackStatus"></span>
         </div>
 
@@ -365,28 +365,50 @@
          * worth running (decks may have changed on Moxfield), but a network import
          * is skipped when the registry already has decks for them.
          */
-        async function applyUser() {
+        /**
+         * Search: switch the dashboard to a user we already have data for.
+         *
+         * Deliberately does not scrape. Looking up a profile you have already
+         * priced should be instant and should not need Chrome. If the user is
+         * unknown, say so and point at Refresh prices, which is what imports them.
+         */
+        async function searchUser() {
             const input = document.getElementById('usernameInput');
             const username = input.value.trim();
             if (!username) {
-                setStatus('Enter a Moxfield username.', 'error');
+                setStatus('Enter a Moxfield username, or leave it blank to show everything tracked.', 'error');
                 return;
             }
 
             busy(true);
             try {
-                setStatus(`Looking up ${username}...`);
-                const res = await fetch('/api/user', {
+                setStatus(`Searching for ${username}...`);
+                const res = await fetch(`/api/user/${encodeURIComponent(username)}`);
+                const body = await res.json();
+                if (!res.ok) throw new Error(body.error || 'Search failed');
+
+                if (!body.known) {
+                    setStatus(
+                        `No data for ${body.user} yet. Press Refresh prices to import and price them.`,
+                        'error'
+                    );
+                    return;
+                }
+
+                // Persist the switch so the dashboard, chart and scraper agree.
+                const set = await fetch('/api/user', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username }),
+                    body: JSON.stringify({ username: body.user, existing: true }),
                 });
-                const body = await res.json();
-                if (!res.ok) throw new Error(body.error || 'Request failed');
-                localStorage.setItem('username', body.user);
+                const setBody = await set.json();
+                if (!set.ok) throw new Error(setBody.error || 'Could not switch user');
 
-                setStatus(`Found ${body.decks} deck${body.decks === 1 ? '' : 's'}. Pricing...`);
-                await doScrape(body.user);
+                localStorage.setItem('username', body.user);
+                await loadData();
+
+                const when = body.lastPricedAt ? ` · last priced ${body.lastPricedAt}` : '';
+                setStatus(`Showing ${body.user} — ${body.decks} deck${body.decks === 1 ? '' : 's'}${when}`, 'success');
             } catch (err) {
                 setStatus(err.message, 'error');
             } finally {
@@ -397,7 +419,24 @@
         async function runScrape() {
             busy(true);
             try {
+                const username = document.getElementById('usernameInput').value.trim();
+                if (username) {
+                    // Make sure the field's user is the tracked one, and that their
+                    // decks are known. Importing is cheap next to pricing, and it is
+                    // the only way a brand new username gets into the database.
+                    setStatus(`Importing ${username}...`);
+                    const res = await fetch('/api/user', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ username }),
+                    });
+                    const body = await res.json();
+                    if (!res.ok) throw new Error(body.error || 'Import failed');
+                    localStorage.setItem('username', body.user);
+                }
                 await doScrape();
+            } catch (err) {
+                setStatus(err.message, 'error');
             } finally {
                 busy(false);
             }

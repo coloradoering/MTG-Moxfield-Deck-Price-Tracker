@@ -5,6 +5,7 @@ const { spawn } = require('child_process');
 
 const registry = require('./deck-registry');
 const api = require('./moxfield-api');
+const chrome = require('./chrome');
 const { colorFor } = require('./colors');
 
 const app = express();
@@ -82,12 +83,43 @@ app.get('/api/user', async (req, res) => {
 });
 
 /**
+ * Look up a Moxfield username without importing anything.
+ *
+ * Backs the Search button: it answers "do we already know this profile?" from the
+ * registry, so switching between users you have scraped is instant and needs no
+ * browser. Importing is the scrape's job now.
+ */
+app.get('/api/user/:username', async (req, res) => {
+  const user = String(req.params.username || '').trim();
+  if (!user) return res.status(400).json({ error: 'Username is required.' });
+
+  try {
+    const result = await withDb(async (db) => {
+      const decks = await registry.listDecks(db, user);
+      const snap = await db
+        .collection('price_logs')
+        .findOne({ user }, { sort: { date: -1 } });
+      return { decks, latestDate: snap?.date || null };
+    });
+
+    res.json({
+      user,
+      known: result.decks.length > 0,
+      decks: result.decks.length,
+      lastPricedAt: result.latestDate,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * Set the tracked Moxfield user and import their decks.
  *
- * This replaces the old manual "add a deck by URL" flow entirely: the username
- * is the only input, and the deck list is whatever that profile publishes. When
- * the username changes, the previous user's decks are deactivated rather than
- * deleted, so their price history survives.
+ * Called by the scrape rather than the Search button: the username is the only
+ * input, and the deck list is whatever that profile publishes. When the username
+ * changes, the previous user's decks are deactivated rather than deleted, so
+ * their price history survives.
  */
 app.post('/api/user', async (req, res) => {
   const user = String((req.body && req.body.username) || '').trim();
@@ -99,6 +131,19 @@ app.post('/api/user', async (req, res) => {
   try {
     const result = await withDb(async (db) => {
       const previous = await currentUser(db);
+
+      // Switching to a user we already have decks for is a pure database change:
+      // no browser, no import. The scrape is what discovers new decks.
+      if (req.body && req.body.existing) {
+        const known = await registry.listDecks(db, user);
+        if (known.length === 0) {
+          throw new Error(`No decks are stored for "${user}". Run a scrape to import them.`);
+        }
+        await db
+          .collection('settings')
+          .updateOne({ _id: 'prefs' }, { $set: { moxfieldUser: user } }, { upsert: true });
+        return { previous, count: known.length, synced: null };
+      }
 
       // Import needs a browser to talk to Moxfield's API, so reuse the scraper's
       // connection path rather than opening a second one here.
@@ -251,10 +296,24 @@ app.post('/api/scrape', async (req, res) => {
   scrapeRunning = true;
   scrapeProgress = 'starting';
   try {
+    // The scraper attaches to an existing browser, so make sure one exists
+    // before spawning it. Starting takes a few seconds; the UI is told so.
+    scrapeProgress = 'checking browser';
+    const launched = await chrome.ensureChrome({
+      log: (msg) => {
+        scrapeProgress = msg;
+        console.log(msg);
+      },
+    });
+
+    if (launched.status === 'no-browser' || launched.status === 'failed') {
+      throw new Error(launched.message || 'No usable browser available.');
+    }
+
     const result = await runScrape((msg) => {
       scrapeProgress = msg;
     });
-    res.json({ ok: true, ...result });
+    res.json({ ok: true, browser: launched.status, ...result });
   } catch (err) {
     res.status(500).json({ error: err.message });
   } finally {
@@ -266,6 +325,12 @@ app.post('/api/scrape', async (req, res) => {
 app.get('/api/scrape/status', (req, res) =>
   res.json({ running: scrapeRunning, message: scrapeProgress })
 );
+
+/** Whether a debuggable Chrome is available, so the UI can say so up front. */
+app.get('/api/chrome', async (req, res) => {
+  const up = await chrome.isChromeUp();
+  res.json({ running: up, url: chrome.CHROME_URL, browser: up ? 'ok' : chrome.findChrome() || null });
+});
 
 app.post('/api/scrub', async (req, res) => {
   const { date } = req.body || {};
