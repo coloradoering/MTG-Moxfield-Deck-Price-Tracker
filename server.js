@@ -13,6 +13,14 @@ const DB_NAME = 'moxfield_tracker';
 
 app.use(express.static('public'));
 app.use(express.json());
+app.use('/fonts-beleren', express.static(path.join(__dirname, 'node_modules/@saeris/typeface-beleren-bold')));
+
+async function withDb(fn) {
+    const client = new MongoClient(MONGO_URL);
+    await client.connect();
+    try { return await fn(client.db(DB_NAME)); }
+    finally { await client.close(); }
+}
 
 const COLORS = [
     '#f43f5e', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6',
@@ -25,13 +33,6 @@ function detectSource(url) {
     if (/moxfield\.com\/decks\//i.test(url)) return 'moxfield';
     if (/archidekt\.com\/decks\//i.test(url)) return 'archidekt';
     return null;
-}
-
-async function withDb(fn) {
-    const client = new MongoClient(MONGO_URL);
-    await client.connect();
-    try { return await fn(client.db(DB_NAME)); }
-    finally { await client.close(); }
 }
 
 // ---- history ----
@@ -94,12 +95,36 @@ app.delete('/api/decks/:name', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+
+app.get('/api/card-history/:deckName', async (req, res) => {
+    try {
+        const deckName = decodeURIComponent(req.params.deckName);
+        const history = await withDb(db =>
+            db.collection('card_prices')
+                .find({ [`decks.${deckName}`]: { $exists: true } })
+                .sort({ date: 1 })
+                .toArray()
+        );
+
+        const formatted = history.map(h => ({
+            date: h.date,
+            cards: h.decks[deckName] || {}
+        }));
+
+        res.json(formatted);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // ---- scrape ----
 let scrapeRunning = false;
 app.post('/api/scrape', async (req, res) => {
     if (scrapeRunning) return res.status(409).json({ error: 'Scrape already in progress.' });
     scrapeRunning = true;
     try {
+        const chromeReady = await ensureChrome();
+        if (!chromeReady) throw new Error('Could not start Chrome. Try again in a few seconds.');
         const data = await scrapePrices();
         res.json({ ok: true, date: data.date, decks: Object.keys(data.prices).length });
     } catch (e) {
@@ -117,8 +142,12 @@ app.post('/api/scrub', async (req, res) => {
         return res.status(400).json({ error: 'Invalid date. Use YYYY-MM-DD.' });
     }
     try {
-        const result = await withDb(db => db.collection('price_logs').deleteMany({ date: { $regex: `^${date}` } }));
-        res.json({ ok: true, deleted: result.deletedCount });
+        const result = await withDb(async db => {
+            const prices = await db.collection('price_logs').deleteMany({ date: { $regex: `^${date}` } });
+            const cards = await db.collection('card_prices').deleteMany({ date: { $regex: `^${date}` } });
+            return { prices: prices.deletedCount, cards: cards.deletedCount };
+        });
+        res.json({ ok: true, deleted: result.prices + result.cards, prices: result.prices, cards: result.cards });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -145,8 +174,36 @@ function launchChrome() {
     });
     child.unref();
 }
+async function ensureChrome() {
+    // Check if Chrome's debug port is already responding
+    try {
+        const res = await fetch('http://localhost:9222/json/version', { signal: AbortSignal.timeout(1500) });
+        if (res.ok) {
+            console.log('✅ Chrome already running with debug port');
+            return true;
+        }
+    } catch {
+        // Not running — fall through to launch
+    }
+
+    console.log('🚀 Launching Chrome...');
+    launchChrome();
+
+    // Wait up to 10 seconds for the debug port to come up
+    for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        try {
+            const res = await fetch('http://localhost:9222/json/version', { signal: AbortSignal.timeout(1000) });
+            if (res.ok) {
+                console.log('✅ Chrome ready');
+                return true;
+            }
+        } catch { /* keep waiting */ }
+    }
+
+    return false;
+}
 
 app.listen(PORT, () => {
     console.log(`📊 Dashboard → http://localhost:${PORT}`);
-    launchChrome();
 });

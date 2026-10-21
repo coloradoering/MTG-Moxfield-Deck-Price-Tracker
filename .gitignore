@@ -1,2 +1,4 @@
 credentials.json 
 *.json.bak 
+node_modules/
+scryfall-cache/

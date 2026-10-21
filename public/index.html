@@ -4,8 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Moxfield Deck Tracker</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
+        @font-face {
+            font-family: 'Beleren';
+            src: url('/fonts-beleren/Beleren2016-Bold.woff') format('woff'),
+                 url('/fonts-beleren/Beleren2016-Bold.ttf') format('truetype');
+            font-weight: normal;
+            font-style: normal;
+            font-display: swap;
+        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -24,7 +33,14 @@
             flex-wrap: wrap;
             gap: 12px;
         }
-        h1 { color: #38bdf8; font-size: 1.5rem; font-weight: 600; }
+        h1 {
+            font-family: 'Beleren', Georgia, serif;
+            color: #38bdf8;
+            font-size: 1.6rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-shadow: 0 0 20px rgba(56, 189, 248, 0.3);
+        }
         .subtitle { color: #64748b; font-size: 0.85rem; }
 
         .toolbar { display: flex; gap: 8px; }
@@ -35,6 +51,7 @@
             padding: 8px 16px;
             border-radius: 8px;
             font-size: 0.85rem;
+            font-family: inherit;
             cursor: pointer;
             transition: all 0.15s;
         }
@@ -45,6 +62,50 @@
         .btn.danger { background: #7f1d1d; border-color: #991b1b; }
         .btn.danger:hover:not(:disabled) { background: #991b1b; }
 
+        [data-tooltip] { position: relative; }
+        [data-tooltip]::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: calc(100% + 8px);
+            left: 50%;
+            transform: translateX(-50%) scale(0.95);
+            background: #0b1220;
+            color: #e2e8f0;
+            border: 1px solid #334155;
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-weight: 400;
+            letter-spacing: 0;
+            white-space: nowrap;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.15s, transform 0.15s;
+            z-index: 100;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        }
+        [data-tooltip]::before {
+            content: '';
+            position: absolute;
+            bottom: calc(100% + 3px);
+            left: 50%;
+            transform: translateX(-50%);
+            border: 5px solid transparent;
+            border-top-color: #334155;
+            opacity: 0;
+            transition: opacity 0.15s;
+            z-index: 100;
+            pointer-events: none;
+        }
+        [data-tooltip]:hover::after {
+            opacity: 1;
+            transform: translateX(-50%) scale(1);
+        }
+        [data-tooltip]:hover::before { opacity: 1; }
+        [data-tooltip]:disabled::after,
+        [data-tooltip]:disabled::before { display: none; }
+
         .controls-card {
             background: #131c2e;
             padding: 20px;
@@ -53,14 +114,20 @@
             margin-bottom: 24px;
         }
         .controls-card h2 { color: #e2e8f0; margin-bottom: 14px; font-size: 1rem; font-weight: 600; }
+        .control-group { margin-bottom: 18px; }
+        .control-group:last-of-type { margin-bottom: 0; }
+        .control-label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #e2e8f0;
+            margin-bottom: 8px;
+        }
         .control-row {
             display: flex;
             flex-wrap: wrap;
             gap: 10px;
-            margin-bottom: 12px;
             align-items: center;
         }
-        .control-row:last-child { margin-bottom: 0; }
         .control-row input {
             background: #0b1220;
             border: 1px solid #334155;
@@ -78,13 +145,14 @@
             font-size: 0.85rem;
             color: #94a3b8;
             min-height: 1.2em;
+            margin-top: 12px;
         }
         .control-status.error { color: #f43f5e; }
         .control-status.success { color: #10b981; }
 
         .stats {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 12px;
             margin-bottom: 24px;
         }
@@ -93,7 +161,20 @@
             padding: 18px;
             border-radius: 10px;
             border: 1px solid #1e293b;
+            position: relative;
+            overflow: hidden;
         }
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+        }
+        .stat-card:nth-child(1)::before { background: linear-gradient(90deg, #f0e68c, #d4af37); }
+        .stat-card:nth-child(2)::before { background: linear-gradient(90deg, #38bdf8, #0ea5e9); }
+        .stat-card:nth-child(3)::before { background: linear-gradient(90deg, #1f1f1f, #4a4a4a); }
+        .stat-card:nth-child(4)::before { background: linear-gradient(90deg, #f97316, #dc2626); }
+        .stat-card:nth-child(5)::before { background: linear-gradient(90deg, #22c55e, #15803d); }
         .stat-label { font-size: 0.75rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
         .stat-value { font-size: 1.5rem; font-weight: 600; color: #38bdf8; }
         .stat-value.positive { color: #10b981; }
@@ -123,7 +204,7 @@
             grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
             gap: 16px;
         }
-        .deck-card {
+                .deck-card {
             background: #131c2e;
             padding: 12px;
             border-radius: 10px;
@@ -131,7 +212,7 @@
             cursor: pointer;
             transition: all 0.15s;
             position: relative;
-            overflow: visible;
+            overflow: hidden;
         }
         .deck-card:hover { border-color: #334155; background: #172236; }
         .deck-card.hidden-deck { opacity: 0.35; }
@@ -156,12 +237,22 @@
             border-radius: 6px;
             cursor: pointer;
             font-size: 0.8rem;
-            z-index: 6;
+            z-index: 8;
             opacity: 0;
             transition: opacity 0.15s;
         }
         .deck-card:hover .deck-delete { opacity: 1; }
         .deck-delete:hover { background: #b91c1c; }
+
+        .deck-card.source-moxfield { border-color: rgba(124, 58, 237, 0.4); }
+        .deck-card.source-moxfield:hover { border-color: #7c3aed; }
+        .deck-card.source-moxfield::before { background: #7c3aed; }
+
+        .deck-card.source-archidekt { border-color: rgba(234, 179, 8, 0.4); }
+        .deck-card.source-archidekt:hover { border-color: #eab308; }
+        .deck-card.source-archidekt::before { background: #eab308; }
+        .deck-card.source-archidekt { background: #1a1600; }
+        .deck-card.source-archidekt:hover { background: #241d00; }
 
         .deck-image-row {
             position: relative;
@@ -182,39 +273,98 @@
             box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
             z-index: 1;
         }
-        .deck-image-row img:nth-child(2) {
-            left: 25%;
-            top: 12%;
-            z-index: 0;
-        }
-        .deck-image-row img:nth-child(3) {
-            left: 35%;
-            top: 20%;
-            z-index: -1;
-        }
-        .deck-image-row img:hover {
-            z-index: 10;
-            transform: scale(1.35);
-        }
+        .deck-image-row img:nth-child(2) { left: 25%; top: 12%; z-index: 0; }
+        .deck-image-row img:nth-child(3) { left: 35%; top: 20%; z-index: -1; }
+        .deck-image-row img:hover { z-index: 10; transform: scale(1.35); }
 
         .deck-name { font-size: 1rem; color: #94a3b8; margin-bottom: 6px; word-break: break-word; }
         .deck-price { font-size: 1.4rem; font-weight: 600; color: var(--deck-color); }
         .deck-change { font-size: 0.8rem; margin-top: 4px; }
         .deck-change.positive { color: #10b981; }
         .deck-change.negative { color: #f43f5e; }
-        .preview-btn {
+
+        .deck-btn-row {
+            display: flex;
+            gap: 6px;
             margin-top: 10px;
+        }
+
+        .preview-btn,
+        .card-list-btn {
+            flex: 1;
             background: #1e293b;
             color: #94a3b8;
             border: 1px solid #334155;
-            padding: 5px 10px;
+            padding: 5px 8px;
             border-radius: 6px;
             cursor: pointer;
             font-size: 0.75rem;
             transition: all 0.15s;
-            width: 100%;
+            font-family: inherit;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
-        .preview-btn:hover { background: #334155; color: #e2e8f0; border-color: #475569; }
+
+        .preview-btn:hover,
+        .card-list-btn:hover {
+            background: #334155;
+            color: #e2e8f0;
+            border-color: #475569;
+        }
+
+        .card-list-modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 40px;
+        }
+        .card-list-modal.active { display: flex; }
+        .card-list-box {
+            background: #131c2e;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            width: 100%;
+            max-width: 900px;
+            height: 85vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .card-list-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid #1e293b;
+        }
+        .card-list-title { font-size: 1rem; font-weight: 600; word-break: break-word; }
+        .card-list-body { flex: 1; overflow-y: auto; padding: 0 20px 20px; }
+        .card-list-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        .card-list-table th {
+            position: sticky;
+            top: 0;
+            background: #131c2e;
+            color: #64748b;
+            text-align: left;
+            padding: 10px 8px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            border-bottom: 1px solid #1e293b;
+            z-index: 1;
+        }
+        .card-list-table td { padding: 8px; border-bottom: 1px solid #1a2538; }
+        .card-list-table tr:hover td { background: #172236; }
+        .card-list-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+        .card-list-table .up { color: #10b981; }
+        .card-list-table .down { color: #f43f5e; }
+        .card-list-table .flat { color: #64748b; }
 
         .modal-overlay {
             display: none;
@@ -247,12 +397,7 @@
             border-bottom: 1px solid #1e293b;
             flex-shrink: 0;
         }
-        .modal-title {
-            font-size: 1rem;
-            font-weight: 600;
-            color: #e2e8f0;
-            word-break: break-word;
-        }
+        .modal-title { font-size: 1rem; font-weight: 600; color: #e2e8f0; word-break: break-word; }
         .modal-close {
             background: #f43f5e;
             color: white;
@@ -286,27 +431,42 @@
     <div class="container">
         <header>
             <div>
-                <h1>🎴 Moxfield Deck Tracker</h1>
+                <h1>Moxfield Deck Tracker</h1>
                 <p class="subtitle" id="lastUpdated"></p>
             </div>
             <div class="toolbar">
-                <button class="btn" onclick="toggleAll()" id="toggleAllBtn">Hide All</button>
-                <button class="btn primary" onclick="loadData()">🔄 Refresh</button>
+                <button class="btn" onclick="toggleAll()" id="toggleAllBtn" data-tooltip="Hide or show all deck lines on the chart">Hide All</button>
+                <button class="btn primary" onclick="loadData()" data-tooltip="Reload data from the server">⟳ Refresh</button>
             </div>
         </header>
 
         <div class="controls-card">
             <h2>⚙️ Controls</h2>
-            <div class="control-row">
-                <button class="btn primary" id="scrapeBtn" onclick="runScrape()">🕷️ Scrape Now</button>
-                <input type="text" id="scrubDate" placeholder="YYYY-MM-DD">
-                <button class="btn danger" onclick="runScrub()">🗑️ Scrub Date</button>
+
+            <div class="control-group">
+                <div class="control-label">Update prices</div>
+                <div class="control-row">
+                    <button class="btn primary" id="scrapeBtn" onclick="runScrape()" data-tooltip="Visit each deck page and record the current total price">🕷️ Scrape Now</button>
+                </div>
             </div>
-            <div class="control-row">
-                <input type="text" id="newDeckName" name="name" placeholder="Deck name">
-                <input type="text" id="newDeckUrl" name="url" placeholder="Moxfield or Archidekt deck URL">
-                <button class="btn" onclick="addDeck()">➕ Add Deck</button>
+
+            <div class="control-group">
+                <div class="control-label">Add a deck</div>
+                <div class="control-row">
+                    <input type="text" id="newDeckName" name="name" placeholder="Deck name">
+                    <input type="text" id="newDeckUrl" name="url" placeholder="Moxfield or Archidekt deck URL">
+                    <button class="btn" onclick="addDeck()" data-tooltip="Add a Moxfield or Archidekt deck to start tracking">➕ Add Deck</button>
+                </div>
             </div>
+
+            <div class="control-group">
+                <div class="control-label">Delete a day's data</div>
+                <div class="control-row">
+                    <input type="date" id="scrubDate" style="background: #0b1220; border: 1px solid #334155; color: #e2e8f0; padding: 8px 12px; border-radius: 8px; font-family: inherit; font-size: 0.85rem; cursor: pointer;">
+                    <button class="btn danger" onclick="runScrub()" data-tooltip="Delete all price records for the entered date">🗑️ Scrub Date</button>
+                </div>
+            </div>
+
             <div class="control-status" id="controlStatus"></div>
         </div>
 
@@ -314,6 +474,7 @@
 
         <div class="chart-card">
             <h2>📈 Value Trends</h2>
+            <p class="hint" style="margin: -8px 0 16px;">Each line is one deck's total value over time. Click a deck card below to hide/show its line.</p>
             <div class="chart-container">
                 <canvas id="valueChart"></canvas>
             </div>
@@ -321,7 +482,7 @@
 
         <div class="deck-section-header">
             <h2>Deck Breakdown</h2>
-            <span class="hint">Click a card to toggle its line — hover to reveal delete</span>
+            <span class="hint">Click a card to toggle its line on the chart</span>
         </div>
         <div class="deck-grid" id="deckGrid"></div>
     </div>
@@ -342,11 +503,35 @@
         </div>
     </div>
 
+    <div class="card-list-modal" id="cardListModal" onclick="if(event.target===this) closeCardList()">
+        <div class="card-list-box">
+            <div class="card-list-header">
+                <div class="card-list-title" id="cardListTitle">Card Prices</div>
+                <button class="modal-close" onclick="closeCardList()">✕</button>
+            </div>
+            <div class="card-list-body">
+                <table class="card-list-table">
+                    <thead>
+                        <tr>
+                            <th>Card</th>
+                            <th class="num">Qty</th>
+                            <th class="num">Unit</th>
+                            <th class="num">Total</th>
+                            <th class="num">Δ Since Last</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cardListBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     <script>
         let chart = null;
         let allHistory = [];
         let allDecks = [];
         let hiddenDecks = new Set();
+        let currentCardListDeck = null;
 
         function setStatus(msg, type) {
             const el = document.getElementById('controlStatus');
@@ -367,7 +552,10 @@
                 if (allHistory.length === 0) {
                     document.getElementById('lastUpdated').textContent = 'No price data yet. Click Scrape Now.';
                     document.getElementById('stats').innerHTML = '';
-                    document.getElementById('deckGrid').innerHTML = '';
+                    document.getElementById('deckGrid').innerHTML = `
+                        <div style="grid-column: 1 / -1; text-align: center; padding: 60px 20px; background: #131c2e; border: 1px dashed #334155; border-radius: 10px; color: #64748b;">
+                            No decks tracked yet. Add a deck above, then click <strong style="color:#38bdf8;">Scrape Now</strong>.
+                        </div>`;
                     if (chart) { chart.destroy(); chart = null; }
                     return;
                 }
@@ -394,6 +582,8 @@
 
             let changeHtml = '<span style="color:#64748b">—</span>';
             let changeClass = '';
+            let biggestMove = null;
+
             if (previous) {
                 const prevTotal = Object.values(previous.prices).filter(v => v > 0).reduce((s, v) => s + v, 0);
                 const diff = totalValue - prevTotal;
@@ -401,6 +591,27 @@
                 const sign = diff >= 0 ? '+' : '';
                 changeClass = diff >= 0 ? 'positive' : 'negative';
                 changeHtml = `${sign}$${diff.toFixed(2)} (${sign}${pct}%)`;
+
+                const moves = Object.entries(latest.prices)
+                    .filter(([name, v]) => v > 0 && previous.prices[name] > 0)
+                    .map(([name, v]) => {
+                        const d = v - previous.prices[name];
+                        const p = (d / previous.prices[name]) * 100;
+                        return { name, diff: d, pct: p };
+                    })
+                    .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+
+                biggestMove = moves[0] || null;
+            }
+
+            let moveName = '—';
+            let moveDetail = '';
+            let moveClass = '';
+            if (biggestMove) {
+                moveName = biggestMove.name;
+                const sign = biggestMove.diff >= 0 ? '+' : '';
+                moveDetail = `${sign}$${biggestMove.diff.toFixed(2)} (${sign}${biggestMove.pct.toFixed(2)}%)`;
+                moveClass = biggestMove.diff >= 0 ? 'positive' : 'negative';
             }
 
             document.getElementById('stats').innerHTML = `
@@ -419,6 +630,11 @@
                 <div class="stat-card">
                     <div class="stat-label">Most Valuable</div>
                     <div class="stat-value" style="font-size:1rem; word-break:break-word;">${mostValuable ? mostValuable[0] : 'N/A'}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Biggest Change</div>
+                    <div class="stat-value" style="font-size:0.9rem; word-break:break-word; color:#e2e8f0;">${moveName}</div>
+                    <div class="deck-change ${moveClass}" style="position:static; font-size:0.8rem; margin-top:4px;">${moveDetail}</div>
                 </div>
             `;
         }
@@ -441,19 +657,22 @@
                 card.className = 'deck-card' + (isHidden ? ' hidden-deck' : '');
                 card.style.setProperty('--deck-color', color);
                 card.addEventListener('click', (e) => {
-                    if (e.target.closest('.deck-delete') || e.target.closest('.preview-btn')) return;
+                    if (e.target.closest('.deck-delete') || e.target.closest('.deck-btn-row')) return;
                     toggleDeck(name);
                 });
 
                 const deleteBtn = document.createElement('button');
                 deleteBtn.className = 'deck-delete';
                 deleteBtn.textContent = '✕';
-                deleteBtn.title = 'Remove deck';
+                deleteBtn.setAttribute('data-tooltip', 'Stop tracking this deck (keeps history)');
                 deleteBtn.addEventListener('click', (e) => {
                     e.stopPropagation();
                     deleteDeck(name);
                 });
                 card.appendChild(deleteBtn);
+
+                const deckSource = (deckInfo && deckInfo.source) || (/archidekt\.com/i.test(deckUrl || '') ? 'archidekt' : 'moxfield');
+                card.classList.add('source-' + deckSource);
 
                 if (deckInfo && deckInfo.image) {
                     const images = Array.isArray(deckInfo.image) ? deckInfo.image : [deckInfo.image];
@@ -489,16 +708,32 @@
                     card.appendChild(changeDiv);
                 }
 
+                const btnRow = document.createElement('div');
+                btnRow.className = 'deck-btn-row';
+
                 if (deckUrl) {
                     const previewBtn = document.createElement('button');
                     previewBtn.className = 'preview-btn';
-                    previewBtn.textContent = '🔍 Preview Deck';
+                    previewBtn.textContent = '🔍 Preview';
+                    previewBtn.setAttribute('data-tooltip', 'Open this deck in a Moxfield preview');
                     previewBtn.addEventListener('click', (e) => {
                         e.stopPropagation();
                         openPreview(name, deckUrl);
                     });
-                    card.appendChild(previewBtn);
+                    btnRow.appendChild(previewBtn);
                 }
+
+                const listBtn = document.createElement('button');
+                listBtn.className = 'card-list-btn';
+                listBtn.textContent = '📊 Prices';
+                listBtn.setAttribute('data-tooltip', 'See every card in this deck with its price and change');
+                listBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openCardList(name);
+                });
+                btnRow.appendChild(listBtn);
+
+                card.appendChild(btnRow);
 
                 grid.appendChild(card);
             }
@@ -545,9 +780,75 @@
             document.getElementById('previewModal').classList.remove('active');
         }
 
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closePreview();
-        });
+        async function openCardList(deckName) {
+            currentCardListDeck = deckName;
+            document.getElementById('cardListTitle').textContent = `${deckName} — Cards by Price Change`;
+            document.getElementById('cardListModal').classList.add('active');
+            document.getElementById('cardListBody').innerHTML = '<tr><td colspan="5" style="text-align:center;color:#64748b;padding:20px;">Loading...</td></tr>';
+
+            try {
+                const res = await fetch(`/api/card-history/${encodeURIComponent(deckName)}`);
+                const history = await res.json();
+                renderCardList(history);
+            } catch (err) {
+                document.getElementById('cardListBody').innerHTML = `<tr><td colspan="5" style="text-align:center;color:#f43f5e;padding:20px;">${err.message}</td></tr>`;
+            }
+        }
+
+        function closeCardList() {
+            document.getElementById('cardListModal').classList.remove('active');
+            currentCardListDeck = null;
+        }
+
+        function renderCardList(history) {
+            const body = document.getElementById('cardListBody');
+
+            if (!history || history.length === 0) {
+                body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#64748b;padding:20px;">No card data yet — click Scrape Cards first.</td></tr>';
+                return;
+            }
+
+            const latest = history[history.length - 1];
+            const previous = history.length > 1 ? history[history.length - 2] : null;
+
+                        const rows = Object.entries(latest.cards).map(([key, info]) => {
+                const name = info.name || key; // Use the stored name, fallback to key
+                const unit = info.usd || 0;
+                const qty = info.quantity || 1;
+                const total = unit * qty;
+
+                let delta = null;
+                if (previous && previous.cards[key]) {
+                    const prevUnit = previous.cards[key].usd || 0;
+                    delta = (unit - prevUnit) * qty;
+                }
+
+                return { name, unit, qty, total, delta };
+            });
+
+            rows.sort((a, b) => {
+                const aD = a.delta == null ? -Infinity : Math.abs(a.delta);
+                const bD = b.delta == null ? -Infinity : Math.abs(b.delta);
+                if (aD !== bD) return bD - aD;
+                return b.total - a.total;
+            });
+
+            body.innerHTML = rows.map(r => {
+                let deltaCell = '<span class="flat">—</span>';
+                if (r.delta != null) {
+                    const sign = r.delta > 0 ? '+' : '';
+                    const cls = r.delta > 0 ? 'up' : r.delta < 0 ? 'down' : 'flat';
+                    deltaCell = `<span class="${cls}">${sign}$${r.delta.toFixed(2)}</span>`;
+                }
+                return `<tr>
+                    <td>${r.name}</td>
+                    <td class="num">${r.qty}</td>
+                    <td class="num">$${r.unit.toFixed(2)}</td>
+                    <td class="num">$${r.total.toFixed(2)}</td>
+                    <td class="num">${deltaCell}</td>
+                </tr>`;
+            }).join('');
+        }
 
         async function runScrape() {
             const btn = document.getElementById('scrapeBtn');
@@ -566,9 +867,10 @@
             }
         }
 
+
         async function runScrub() {
             const input = document.getElementById('scrubDate');
-            const date = input.value.trim();
+            const date = input.value;
             if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
                 setStatus('❌ Enter date as YYYY-MM-DD', 'error');
                 return;
@@ -582,7 +884,7 @@
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'Scrub failed');
-                setStatus(`✅ Deleted ${data.deleted} entries for ${date}`, 'success');
+                setStatus(`✅ Deleted ${data.prices} price snapshots and ${data.cards} card-price snapshots for ${date}`, 'success');
                 input.value = '';
                 await loadData();
             } catch (err) {
@@ -715,6 +1017,10 @@
                 }
             });
         }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { closePreview(); closeCardList(); }
+        });
 
         loadData();
     </script>
