@@ -10,6 +10,38 @@ function detectSource(url) {
     return 'moxfield';
 }
 
+/**
+ * Pick the correct price for a printing based on its finish.
+ * Handles foil-only / etched-only cards where `usd` is absent.
+ */
+function pickPrice(prices, { isFoil, isEtched }) {
+    prices = prices || {};
+    const n = (v) => {
+        const p = parseFloat(v);
+        return Number.isFinite(p) ? p : null;
+    };
+
+    if (isEtched) {
+        return n(prices.usd_etched)
+            ?? n(prices.usd_foil)
+            ?? n(prices.usd)
+            ?? n(prices.ck_etched)
+            ?? n(prices.ck_foil)
+            ?? n(prices.ck)
+            ?? 0;
+    }
+    if (isFoil) {
+        return n(prices.usd_foil)
+            ?? n(prices.usd)
+            ?? n(prices.ck_foil)
+            ?? n(prices.ck)
+            ?? 0;
+    }
+    return n(prices.usd)
+        ?? n(prices.ck)
+        ?? 0;
+}
+
 async function getMoxfieldDeckData(page, deckUrl) {
     const deckId = deckUrl.match(/moxfield\.com\/decks\/([^/?#]+)/)?.[1];
     if (!deckId) throw new Error('Bad Moxfield URL');
@@ -34,31 +66,67 @@ async function getMoxfieldDeckData(page, deckUrl) {
             const card = entry.card;
             if (!card) continue;
 
-            const qty = entry.quantity || 1;
-            const isEtched = entry.finish === 'etched';
-            const isFoil = entry.finish === 'foil' || entry.isFoil === true;
-
-            let price = 0;
-            if (isEtched) {
-                price = parseFloat(card.prices?.usd_etched || card.prices?.usd || 0);
-            } else if (isFoil) {
-                price = parseFloat(card.prices?.usd_foil || card.prices?.usd || 0);
-            } else {
-                price = parseFloat(card.prices?.usd || 0);
-            }
-            
-            total += price * qty;
-            
-                        // Use the Moxfield internal ID to distinguish printings.
-            // Fallback to scryfall_id, then name.
             const cardKey = card.id || card.scryfall_id || card.name;
-            cards[cardKey] = { usd: price, quantity: qty, name: card.name };
+            if (!cards[cardKey]) {
+                cards[cardKey] = {
+                    name: card.name,
+                    usd: 0,
+                    quantity: 0,
+                    lineTotal: 0,
+                    printings: []
+                };
+            }
+
+            // Prefer printingData: it is the per-copy truth for what is owned.
+            const printings = Array.isArray(entry.printingData) && entry.printingData.length > 0
+                ? entry.printingData
+                : [entry];
+
+            for (let i = 0; i < printings.length; i++) {
+                const printing = printings[i];
+                const qty = printing.quantity || entry.quantity || 1;
+                const finish = printing.finish || entry.finish || 'nonFoil';
+                const isEtched = finish === 'etched';
+                const isFoil = finish === 'foil' || printing.isFoil === true || entry.isFoil === true;
+
+                const prices =
+                    printing.card?.prices ||
+                    printing.prices ||
+                    card.prices ||
+                    {};
+
+                const price = pickPrice(prices, { isFoil, isEtched });
+                const lineTotal = price * qty;
+
+                total += lineTotal;
+
+                const rec = cards[cardKey];
+                rec.quantity += qty;
+                rec.lineTotal += lineTotal;
+                rec.printings.push({
+                    finish,
+                    isFoil,
+                    isEtched,
+                    quantity: qty,
+                    unitPrice: price,
+                    lineTotal,
+                    cardId: printing.card?.id || card.id,
+                    scryfall_id: printing.card?.scryfall_id || card.scryfall_id
+                });
+
+                if (i === 0) rec.usd = price;
+            }
 
             if (boardName === 'commanders' && card.scryfall_id && images.length < 2) {
                 const id = card.scryfall_id;
                 images.push(`https://cards.scryfall.io/normal/front/${id[0]}/${id[1]}/${id}.jpg`);
             }
         }
+    }
+
+    for (const rec of Object.values(cards)) {
+        rec.usd = Math.round(rec.usd * 100) / 100;
+        rec.lineTotal = Math.round(rec.lineTotal * 100) / 100;
     }
 
     return { price: Math.round(total * 100) / 100, images, cards };
@@ -128,7 +196,7 @@ async function scrapePrices({ onProgress } = {}) {
 
     const now = new Date();
     const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    
+
     const runData = { date: timestamp, prices: {}, images: {} };
     const cardRunData = { date: timestamp, decks: {} };
 
@@ -145,7 +213,7 @@ async function scrapePrices({ onProgress } = {}) {
                 const { price, images, cards } = await getMoxfieldDeckData(page, deck.url);
                 runData.prices[deck.name] = price;
                 if (images.length > 0) runData.images[deck.name] = images;
-                if (cards) cardRunData.decks[deck.name] = cards;
+                if (cards && Object.keys(cards).length > 0) cardRunData.decks[deck.name] = cards;
                 log(`   ✅ -> $${price.toFixed(2)}`);
             } else {
                 await page.goto(deck.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -167,7 +235,7 @@ async function scrapePrices({ onProgress } = {}) {
 
     log("🍃 Saving...");
     await db.collection('price_logs').insertOne(runData);
-    
+
     if (Object.keys(cardRunData.decks).length > 0) {
         await db.collection('card_prices').insertOne(cardRunData);
     }
