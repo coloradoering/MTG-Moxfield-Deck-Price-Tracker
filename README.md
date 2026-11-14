@@ -215,7 +215,7 @@ Everything is environment-driven; no source edits needed.
 
 ## Design notes and gotchas
 
-**Values are computed from card prices, not read off the page.** Each deck's total is the sum of `prices.usd` (or `usd_foil` for foils) across the mainboard plus the commander, with basic lands excluded — matching how the deck page reports it. Cross-checked against recorded history: a deck the chart shows at $86.61 computes to $90.73, and one at $1054.17 computes to $1045.24. Those gaps are real card-price drift, not error.
+**Values are computed from card prices, not read off the page.** Each deck's total uses the printing-specific finish and price from `printingData` when available, otherwise the entry-level finish, across the mainboard plus commanders and signature spells. Basic lands are excluded.
 
 **A deck that fails is recorded under `missing`, not as `$0.00`.** Writing a zero would make a broken scrape indistinguishable from a worthless deck. Failures appear in the console and in the snapshot; that deck simply has no point for that run.
 
@@ -231,7 +231,7 @@ Everything is environment-driven; no source edits needed.
 
 ## Status
 
-Working tool, no tests, no CI. `node_modules/` is committed, `.gitignore` covers only `credentials.json` and `*.json.bak`.
+Working tool with focused pricing tests and no CI. Run them with `node --test moxfield-api.test.js`. `node_modules/` is committed, `.gitignore` covers only `credentials.json`, database dumps, and `*.json.bak`.
 
 Known rough edges:
 

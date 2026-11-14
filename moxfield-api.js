@@ -184,6 +184,42 @@ function resolveVendor(name) {
   );
 }
 
+function finishForPrinting(printing, entry) {
+  const normalize = (value) => {
+    if (typeof value !== 'string') return null;
+    const finish = value.toLowerCase().replace(/[-_\s]/g, '');
+    if (finish.includes('etched')) return 'etched';
+    if (finish === 'foil') return 'foil';
+    if (finish === 'nonfoil') return 'nonFoil';
+    return null;
+  };
+
+  const explicitFinish = normalize(printing.finish) || normalize(printing.card?.finish);
+  if (explicitFinish) return explicitFinish;
+  if (printing.isEtched === true) return 'etched';
+  if (typeof printing.isFoil === 'boolean') return printing.isFoil ? 'foil' : 'nonFoil';
+
+  const entryFinish = normalize(entry.finish) || normalize(entry.card?.finish);
+  if (entryFinish) return entryFinish;
+  if (entry.isEtched === true) return 'etched';
+  if (typeof entry.isFoil === 'boolean') return entry.isFoil ? 'foil' : 'nonFoil';
+  return 'nonFoil';
+}
+
+function priceForFinish(prices, field, finish) {
+  const keys = finish === 'etched'
+    ? [`${field}_etched`, `${field}_foil`, field]
+    : finish === 'foil'
+      ? [`${field}_foil`, field]
+      : [field];
+
+  for (const key of keys) {
+    const value = Number.parseFloat(prices[key]);
+    if (Number.isFinite(value)) return value;
+  }
+  return 0;
+}
+
 /**
  * Total market value for one vendor, computed from per-card prices.
  *
@@ -204,11 +240,26 @@ function deckValue(deck, vendor = DEFAULT_VENDOR) {
     for (const entry of Object.values(board || {})) {
       const card = entry.card || {};
       if (card.isBasicLand || card.isBasic) continue;
-      const prices = card.prices || {};
-      const foilField = `${field}_foil`;
-      const raw = entry.isFoil && prices[foilField] != null ? prices[foilField] : prices[field];
-      const value = Number.parseFloat(raw);
-      if (Number.isFinite(value)) total += value * (entry.quantity || 1);
+      const printings = Array.isArray(entry.printingData) && entry.printingData.length > 0
+        ? entry.printingData
+        : [entry];
+
+      for (const printing of printings) {
+        const quantity = Number(printing.quantity);
+        const entryQuantity = Number(entry.quantity);
+        const count = Number.isFinite(quantity) && quantity > 0
+          ? quantity
+          : printings.length === 1 && Number.isFinite(entryQuantity) && entryQuantity > 0
+            ? entryQuantity
+            : 1;
+        const prices = [
+          printing.card?.prices,
+          printing.prices,
+          card.prices,
+        ].find((candidate) => candidate && Object.keys(candidate).length > 0) || {};
+
+        total += priceForFinish(prices, field, finishForPrinting(printing, entry)) * count;
+      }
     }
     return total;
   };
