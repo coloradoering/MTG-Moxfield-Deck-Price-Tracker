@@ -373,6 +373,7 @@
         let allHistory = [];
         let allDecks = [];
         let hiddenDecks = new Set();
+        let deckColors = new Map();
         let vendors = [];
         let vendor = localStorage.getItem('vendor') || 'tcgplayer';
 
@@ -534,6 +535,7 @@
                 allHistory = await historyRes.json();
                 const deckBody = await decksRes.json();
                 allDecks = Array.isArray(deckBody) ? deckBody : deckBody.decks || [];
+                assignDeckColors();
                 const deckSource = deckBody.source || 'registry';
 
                 if (allHistory.length === 0) {
@@ -603,6 +605,23 @@
             `;
         }
 
+        function assignDeckColors() {
+            const names = new Set(allDecks.map((deck) => deck.name));
+            for (const snapshot of allHistory) {
+                for (const name of Object.keys(snapshot.prices || {})) names.add(name);
+            }
+
+            const orderedNames = [...names].sort((a, b) => a.localeCompare(b));
+            const colorCount = Math.max(orderedNames.length, 1);
+            deckColors = new Map(orderedNames.map((name, index) => {
+                const hue = Math.round((index * 360) / colorCount);
+                return [name, {
+                    line: `hsl(${hue}, 72%, 56%)`,
+                    fill: `hsla(${hue}, 72%, 56%, 0.12)`,
+                }];
+            }));
+        }
+
         function renderDeckCards(latest, previous) {
             const sorted = Object.entries(latest.prices)
                 .filter(([, v]) => v > 0)
@@ -613,7 +632,7 @@
 
             for (const [name, price] of sorted) {
                 const deckInfo = allDecks.find(d => d.name === name);
-                const color = deckInfo ? deckInfo.color : '#94a3b8';
+                const color = deckColors.get(name)?.line || '#94a3b8';
                 const deckUrl = deckInfo ? deckInfo.url : null;
                 const isHidden = hiddenDecks.has(name);
 
@@ -834,23 +853,21 @@
             }
             const deckNames = [...nameSet];
 
-            const fallbackColors = [
-                '#f43f5e', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6',
-                '#ec4899', '#06b6d4', '#84cc16', '#eab308', '#6366f1',
-                '#14b8a6', '#f97316', '#a855f7', '#22c55e', '#e11d48',
-                '#0ea5e9'
-            ];
-
             const datasets = deckNames
                 .filter(name => !hiddenDecks.has(name))
-                .map((name, i) => {
-                    const info = allDecks.find(d => d.name === name);
-                    const color = info ? info.color : fallbackColors[i % fallbackColors.length];
+                .map((name) => {
+                    const colors = deckColors.get(name);
+                    const data = allHistory.map((snapshot) => {
+                        const price = snapshot.prices?.[name];
+                        return typeof price === 'number' && Number.isFinite(price) && price > 0
+                            ? price
+                            : null;
+                    });
                     return {
                         label: name,
-                        data: allHistory.map(h => h.prices[name] ?? null),
-                        borderColor: color,
-                        backgroundColor: color + '20',
+                        data,
+                        borderColor: colors?.line || '#94a3b8',
+                        backgroundColor: colors?.fill || 'rgba(148, 163, 184, 0.12)',
                         tension: 0.15,
                         spanGaps: true,
                         pointRadius: 2,
