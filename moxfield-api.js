@@ -272,6 +272,71 @@ function deckValue(deck, vendor = DEFAULT_VENDOR) {
   return Math.round(total * 100) / 100;
 }
 
+function cardPriceBreakdown(deck) {
+  const cards = {};
+  const boards = ['commanders', 'companions', 'mainboard', 'sideboard', 'signatureSpells'];
+
+  for (const boardName of boards) {
+    for (const entry of Object.values(deck[boardName] || {})) {
+      const card = entry.card || {};
+      const printings = Array.isArray(entry.printingData) && entry.printingData.length > 0
+        ? entry.printingData
+        : [entry];
+
+      for (const printing of printings) {
+        const quantity = Number(printing.quantity);
+        const entryQuantity = Number(entry.quantity);
+        const count = Number.isFinite(quantity) && quantity > 0
+          ? quantity
+          : printings.length === 1 && Number.isFinite(entryQuantity) && entryQuantity > 0
+            ? entryQuantity
+            : 1;
+        const finish = finishForPrinting(printing, entry);
+        const printingCard = printing.card || {};
+        const cardId = printingCard.id || printingCard.scryfall_id || card.id || card.scryfall_id;
+        const cardName = printingCard.name || card.name;
+        if (!cardName) continue;
+
+        const key = `${boardName}:${cardId || cardName}:${finish}`;
+        const record = cards[key] || (cards[key] = {
+          name: cardName,
+          cardId: cardId || null,
+          board: boardName,
+          finish,
+          quantity: 0,
+          vendors: {},
+        });
+        const prices = [
+          printingCard.prices,
+          printing.prices,
+          card.prices,
+        ].find((candidate) => candidate && Object.keys(candidate).length > 0) || {};
+
+        record.quantity += count;
+        for (const [vendor, { field }] of Object.entries(VENDORS)) {
+          const unitPrice = priceForFinish(prices, field, finish);
+          const vendorRecord = record.vendors[vendor] || (record.vendors[vendor] = {
+            unitPrice: 0,
+            lineTotal: 0,
+          });
+          vendorRecord.lineTotal += unitPrice * count;
+        }
+      }
+    }
+  }
+
+  for (const record of Object.values(cards)) {
+    for (const vendorRecord of Object.values(record.vendors)) {
+      vendorRecord.lineTotal = Math.round(vendorRecord.lineTotal * 100) / 100;
+      vendorRecord.unitPrice = record.quantity
+        ? Math.round((vendorRecord.lineTotal / record.quantity) * 100) / 100
+        : 0;
+    }
+  }
+
+  return cards;
+}
+
 /** Every supported vendor's total for one deck, for comparison and storage. */
 function allVendorValues(deck) {
   const out = {};
@@ -407,6 +472,7 @@ module.exports = {
   discoverDecks,
   fetchDeck,
   deckValue,
+  cardPriceBreakdown,
   allVendorValues,
   resolveVendor,
   commanderImages,

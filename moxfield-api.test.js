@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { deckValue } = require('./moxfield-api');
+const { cardPriceBreakdown, deckValue } = require('./moxfield-api');
 
 test('uses printingData finish and per-printing prices before entry flags', () => {
   const deck = {
@@ -30,6 +30,42 @@ test('uses printingData finish and per-printing prices before entry flags', () =
   };
 
   assert.equal(deckValue(deck, 'tcgplayer'), 19);
+});
+
+test('exposes per-card printing rows and vendor totals for card history', () => {
+  const cards = cardPriceBreakdown({
+    mainboard: {
+      example: {
+        quantity: 3,
+        isFoil: true,
+        card: { id: 'oracle-id', name: 'Example Card' },
+        printingData: [
+          {
+            quantity: 1,
+            finish: 'nonFoil',
+            card: { prices: { usd: '3.00', usd_foil: '8.00' } },
+          },
+          {
+            quantity: 2,
+            finish: 'foil',
+            card: { prices: { usd: '3.00', usd_foil: '8.00' } },
+          },
+        ],
+      },
+    },
+  });
+
+  const rows = Object.values(cards).sort((a, b) => a.finish.localeCompare(b.finish));
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map(({ finish, quantity, vendors }) => ({
+    finish,
+    quantity,
+    unitPrice: vendors.tcgplayer.unitPrice,
+    lineTotal: vendors.tcgplayer.lineTotal,
+  })), [
+    { finish: 'foil', quantity: 2, unitPrice: 8, lineTotal: 16 },
+    { finish: 'nonFoil', quantity: 1, unitPrice: 3, lineTotal: 3 },
+  ]);
 });
 
 test('handles etched and legacy foil entries while excluding basic lands', () => {

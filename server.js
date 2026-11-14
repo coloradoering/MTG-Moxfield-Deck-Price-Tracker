@@ -286,6 +286,53 @@ app.get('/api/decks', async (req, res) => {
   }
 });
 
+app.get('/api/card-history/:deckName', async (req, res) => {
+  try {
+    const deckName = req.params.deckName;
+    const vendor = api.resolveVendor(req.query.vendor);
+    const history = await withDb(async (db) => {
+      const user = req.query.user || (await currentUser(db));
+      const filter = user
+        ? { $or: [{ user }, { user: { $exists: false } }] }
+        : {};
+      const snapshots = await db
+        .collection('card_prices')
+        .find(filter)
+        .sort({ date: 1 })
+        .toArray();
+
+      return snapshots
+        .filter((snapshot) => snapshot.decks && snapshot.decks[deckName])
+        .map((snapshot) => ({
+          date: snapshot.date,
+          cards: Object.fromEntries(
+            Object.entries(snapshot.decks[deckName]).map(([id, card]) => {
+              const vendorPrices = card.vendors?.[vendor];
+              const legacyPrice = vendor === api.DEFAULT_VENDOR
+                ? Number.parseFloat(card.usd ?? card.unitPrice)
+                : null;
+              const unitPrice = vendorPrices?.unitPrice ?? legacyPrice;
+              const quantity = Number(card.quantity) || 1;
+              const lineTotal = vendorPrices?.lineTotal
+                ?? (Number.isFinite(unitPrice) ? unitPrice * quantity : null);
+
+              return [id, {
+                ...card,
+                quantity,
+                unitPrice: Number.isFinite(unitPrice) ? unitPrice : null,
+                lineTotal: Number.isFinite(lineTotal) ? lineTotal : null,
+              }];
+            })
+          ),
+        }));
+    });
+
+    res.json(history);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // ---------------------------------------------------------------- scrape / scrub
 
 let scrapeRunning = false;
@@ -296,13 +343,8 @@ app.post('/api/scrape', async (req, res) => {
   scrapeRunning = true;
   scrapeProgress = 'starting';
   try {
-    // Refuse up front rather than letting the scraper fail obscurely inside a
-    // page. This only checks; starting Chrome is the user's job (see chrome.js).
-    scrapeProgress = 'checking browser';
-    const status = await chrome.checkChrome();
-    if (!status.up) {
-      throw new Error(status.message);
-    }
+    scrapeProgress = 'starting Chrome if needed';
+    await chrome.ensureChrome();
 
     const result = await runScrape((msg) => {
       scrapeProgress = msg;

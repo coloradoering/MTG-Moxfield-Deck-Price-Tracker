@@ -168,8 +168,15 @@
         .deck-change { font-size: 0.8rem; margin-top: 4px; }
         .deck-change.positive { color: #10b981; }
         .deck-change.negative { color: #f43f5e; }
-        .preview-btn {
+        .deck-action-row {
+            display: flex;
+            gap: 8px;
             margin-top: auto;
+            padding-top: 10px;
+        }
+        .preview-btn,
+        .card-prices-btn {
+            flex: 1;
             background: #1e293b;
             color: #94a3b8;
             border: 1px solid #334155;
@@ -178,9 +185,10 @@
             cursor: pointer;
             font-size: 0.75rem;
             transition: all 0.15s;
-            width: 100%;
+            min-width: 0;
         }
-        .preview-btn:hover { background: #334155; color: #e2e8f0; border-color: #475569; }
+        .preview-btn:hover,
+        .card-prices-btn:hover { background: #334155; color: #e2e8f0; border-color: #475569; }
 
         /* Modal */
         .modal-overlay {
@@ -255,6 +263,26 @@
         }
         .modal-footer a { color: #38bdf8; text-decoration: none; }
         .modal-footer a:hover { text-decoration: underline; }
+        .card-price-box { max-width: 1000px; }
+        .card-price-body { flex: 1; overflow: auto; padding: 0 20px 20px; }
+        .card-price-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        .card-price-table th {
+            position: sticky;
+            top: 0;
+            background: #131c2e;
+            color: #64748b;
+            text-align: left;
+            padding: 10px 8px;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            border-bottom: 1px solid #1e293b;
+        }
+        .card-price-table td { padding: 8px; border-bottom: 1px solid #1a2538; }
+        .card-price-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+        .card-price-table .up { color: #10b981; }
+        .card-price-table .down { color: #f43f5e; }
+        .card-price-table .flat { color: #64748b; }
+        .card-price-empty { color: #94a3b8; padding: 24px 8px !important; text-align: center; }
     </style>
 </head>
 <body>
@@ -278,7 +306,7 @@
             <label for="usernameInput">Moxfield username</label>
             <input type="text" id="usernameInput" placeholder="e.g. CorbanMonoxide" autocomplete="off" spellcheck="false">
             <button class="btn primary" id="trackBtn" onclick="searchUser()">Search</button>
-            <button class="btn ghost" id="scrapeBtn" onclick="runScrape()" title="Check for Chrome, start it if needed, then re-price the tracked decks">↻ Refresh prices</button>
+            <button class="btn ghost" id="scrapeBtn" onclick="runScrape()" title="Starts Chrome if needed, then re-prices the tracked decks">↻ Refresh prices</button>
             <span class="track-status" id="trackStatus"></span>
         </div>
 
@@ -311,6 +339,31 @@
             <div class="modal-footer">
                 <span>Preview powered by Moxfield</span>
                 <a id="openInMoxfield" href="#" target="_blank" rel="noopener">Open in Moxfield ↗</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="cardPriceModal" onclick="if(event.target===this) closeCardPrices()">
+        <div class="modal-box card-price-box">
+            <div class="modal-header">
+                <div class="modal-title" id="cardPriceTitle">Card Prices</div>
+                <button class="modal-close" onclick="closeCardPrices()">✕</button>
+            </div>
+            <div class="card-price-body">
+                <table class="card-price-table">
+                    <thead>
+                        <tr>
+                            <th>Card</th>
+                            <th>Board</th>
+                            <th>Finish</th>
+                            <th class="num">Qty</th>
+                            <th class="num">Unit</th>
+                            <th class="num">Total</th>
+                            <th class="num">Δ Since Last</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cardPriceBody"></tbody>
+                </table>
             </div>
         </div>
     </div>
@@ -561,7 +614,10 @@
                 const card = document.createElement('div');
                 card.className = 'deck-card' + (isHidden ? ' hidden-deck' : '');
                 card.style.setProperty('--deck-color', color);
-                card.addEventListener('click', () => toggleDeck(name));
+                card.addEventListener('click', (e) => {
+                    if (e.target.closest('.deck-action-row')) return;
+                    toggleDeck(name);
+                });
 
                 if (deckInfo && deckInfo.image) {
                     const images = Array.isArray(deckInfo.image) ? deckInfo.image : [deckInfo.image];
@@ -599,16 +655,29 @@
                     card.appendChild(changeDiv);
                 }
 
+                const actionRow = document.createElement('div');
+                actionRow.className = 'deck-action-row';
+
                 if (deckUrl) {
                     const previewBtn = document.createElement('button');
                     previewBtn.className = 'preview-btn';
-                    previewBtn.textContent = '🔍 Preview Deck';
+                    previewBtn.textContent = '🔍 Preview';
                     previewBtn.addEventListener('click', (e) => {
                         e.stopPropagation();
                         openPreview(name, deckUrl);
                     });
-                    card.appendChild(previewBtn);
+                    actionRow.appendChild(previewBtn);
                 }
+
+                const cardPricesBtn = document.createElement('button');
+                cardPricesBtn.className = 'card-prices-btn';
+                cardPricesBtn.textContent = '📊 Card Prices';
+                cardPricesBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openCardPrices(name);
+                });
+                actionRow.appendChild(cardPricesBtn);
+                card.appendChild(actionRow);
 
                 grid.appendChild(card);
             }
@@ -654,8 +723,95 @@
             document.getElementById('previewModal').classList.remove('active');
         }
 
+        async function openCardPrices(deckName) {
+            const modal = document.getElementById('cardPriceModal');
+            const body = document.getElementById('cardPriceBody');
+            const label = vendors.find((v) => v.key === vendor)?.label || vendor;
+            document.getElementById('cardPriceTitle').textContent = `${deckName} — Card Prices (${label})`;
+            body.innerHTML = '<tr><td class="card-price-empty" colspan="7">Loading card history...</td></tr>';
+            modal.classList.add('active');
+
+            try {
+                const params = new URLSearchParams({ vendor });
+                const res = await fetch(
+                    `/api/card-history/${encodeURIComponent(deckName)}?${params.toString()}`
+                );
+                const history = await res.json();
+                if (!res.ok) throw new Error(history.error || 'Could not load card history');
+                renderCardPrices(history);
+            } catch (err) {
+                body.innerHTML = '';
+                const row = body.insertRow();
+                const cell = row.insertCell();
+                cell.colSpan = 7;
+                cell.className = 'card-price-empty';
+                cell.textContent = err.message;
+            }
+        }
+
+        function renderCardPrices(history) {
+            const body = document.getElementById('cardPriceBody');
+            body.innerHTML = '';
+            if (!history.length) {
+                const row = body.insertRow();
+                const cell = row.insertCell();
+                cell.colSpan = 7;
+                cell.className = 'card-price-empty';
+                cell.textContent = 'No card-price snapshots yet. Run Refresh prices to start card history.';
+                return;
+            }
+
+            const latest = history[history.length - 1];
+            const previous = history.length > 1 ? history[history.length - 2] : null;
+            const cards = Object.entries(latest.cards || {})
+                .sort((a, b) => (b[1].lineTotal || 0) - (a[1].lineTotal || 0));
+
+            if (!cards.length) {
+                const row = body.insertRow();
+                const cell = row.insertCell();
+                cell.colSpan = 7;
+                cell.className = 'card-price-empty';
+                cell.textContent = 'No card-price data in the latest snapshot.';
+                return;
+            }
+
+            for (const [id, card] of cards) {
+                const oldTotal = previous?.cards?.[id]?.lineTotal;
+                const currentTotal = card.lineTotal ?? 0;
+                const delta = Number.isFinite(oldTotal) ? currentTotal - oldTotal : null;
+                const row = body.insertRow();
+                const values = [
+                    card.name || id,
+                    card.board || '—',
+                    card.finish || '—',
+                    card.quantity ?? 1,
+                    card.unitPrice == null ? '—' : `$${card.unitPrice.toFixed(2)}`,
+                    `$${currentTotal.toFixed(2)}`,
+                ];
+
+                for (let index = 0; index < values.length; index += 1) {
+                    const cell = row.insertCell();
+                    cell.textContent = values[index];
+                    if (index >= 3) cell.className = 'num';
+                }
+
+                const deltaCell = row.insertCell();
+                deltaCell.className = `num ${delta === null ? 'flat' : delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat'}`;
+                deltaCell.textContent = delta === null
+                    ? '—'
+                    : `${delta >= 0 ? '+' : ''}$${delta.toFixed(2)}`;
+            }
+        }
+
+        function closeCardPrices() {
+            document.getElementById('cardPriceModal').classList.remove('active');
+        }
+
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closePreview();
+            if (e.key === 'Escape') {
+                closePreview();
+                closeCardPrices();
+            }
         });
 
         function renderChart() {

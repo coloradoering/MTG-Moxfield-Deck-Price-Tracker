@@ -66,10 +66,10 @@ This also explains the project's shape: it is a companion to your browser sessio
 | `run.js` | Scrape entry point. Connects to Chrome, resolves your collection, prices each deck, writes one snapshot to MongoDB. |
 | `decks.js` | Chart colours only. Deck selection is no longer configured here — set `MOXFIELD_USER` instead. |
 | `server.js` | Express server. Serves the dashboard and a small JSON API. Port `3000` (override with `PORT`). |
-| `public/index.html` | Dashboard UI — stat cards, Chart.js line chart, per-deck cards with prices and day-over-day change, deck preview modal. |
+| `public/index.html` | Dashboard UI — stat cards, Chart.js line chart, per-deck cards with prices and day-over-day change, deck preview and card-price history modals. |
 | `buh.js` | Seed script — inserts **fake** historical data so the dashboard has something to render. Destructive. |
 | `scrub.js` | Deletes all snapshots for the current date, so you can re-run a scrape cleanly. |
-| `start-chrome.bat` | Windows helper that launches Chrome with remote debugging on port `9222`. |
+| `start-chrome.bat` | Optional Windows helper that launches Chrome with remote debugging on port `9222`. |
 | `tracker.py` | Legacy Python scraper writing to Google Sheets. Not used by the app; kept for reference. |
 | `moxfield_history.json`, `moxfield_prices_2026-08-11.csv` | Leftover data exports. Nothing in the app reads them. |
 
@@ -102,21 +102,13 @@ mongosh --eval "db.runCommand({ping:1})"
 
 Data lives at the server's configured `dbPath` — typically `/var/lib/mongodb` on a Linux package install, or `C:\Program Files\MongoDB\Server\<version>\data` on Windows. The database name is `moxfield_tracker`.
 
-### 2. Launch Chrome with remote debugging
+### 2. Chrome startup
 
-The scraper **attaches to an existing Chrome** rather than launching its own. This is deliberate — Moxfield blocks headless automation, and a real browser profile gets through. The login session lives in the profile directory, so you log in once and later runs reuse it.
+No manual Chrome launch is needed. The scraper automatically launches a visible Chrome with remote debugging when you click **Refresh prices** or run `npm run scrape`. It uses a dedicated `chrome-debug-profile` in your home directory, keeping the scraper session separate from your regular Chrome profile. If Moxfield requires a login, sign in once in that window; later runs reuse the profile.
 
 This is also **why the project has no Docker setup**. A container cannot reach the host's Chrome, and running Chrome inside one reintroduces the headless fingerprint the approach exists to avoid. The scraper, database, and dashboard are meant to run natively on the same machine.
 
-**Windows:** run `start-chrome.bat`
-
-**Linux/macOS:**
-
-```bash
-google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/moxfield-chrome
-```
-
-Log into Moxfield in that browser window if needed, then leave it open.
+If Chrome is installed in a non-standard location, set `CHROME_PATH` to its executable. `start-chrome.bat` remains available as an optional manual launcher on Windows.
 
 ### 3. Install dependencies
 
@@ -148,9 +140,11 @@ Your username is the last part of your profile URL: `https://moxfield.com/users/
 
 Each run discovers **every deck you own** and keeps the Commander ones. Add `--all-formats` to price everything.
 
-Output looks like:
+Output looks like (the first line varies depending on whether Chrome was already running):
 
 ```
+Checking Chrome at http://localhost:9222...
+Chrome launched.
 Connecting to Chrome at http://localhost:9222...
 Reusing existing tab: https://moxfield.com/
 
@@ -190,6 +184,7 @@ If the dashboard says *"No data yet"*, you either haven't scraped or MongoDB is 
 | `GET /api/history` | All snapshots, sorted oldest → newest. |
 | `GET /api/latest` | The single most recent snapshot. |
 | `GET /api/decks` | Deck metadata for the UI: name, chart colour, Moxfield URL, commander image. |
+| `GET /api/card-history/:deckName` | Per-card snapshots for the selected deck and vendor. |
 
 The server opens and closes a MongoDB connection per request. Fine for a local single-user dashboard; not appropriate for anything load-bearing.
 
@@ -205,6 +200,8 @@ Everything is environment-driven; no source edits needed.
 | `MONGO_URL` | `mongodb://localhost:27017` | all scripts |
 | `DB_NAME` | `moxfield_tracker` | all scripts |
 | `CHROME_URL` | `http://localhost:9222` | `run.js` |
+| `CHROME_PATH` | platform default | Chrome executable used when starting the browser |
+| `CHROME_PROFILE_DIR` | `~/chrome-debug-profile` | dedicated browser profile used for the Moxfield session |
 | `PORT` | `3000` | `server.js` |
 
 `run.js` also accepts `--user <name>` and `--all-formats`. The flag wins over `MOXFIELD_USER`.
@@ -216,6 +213,8 @@ Everything is environment-driven; no source edits needed.
 ## Design notes and gotchas
 
 **Values are computed from card prices, not read off the page.** Each deck's total uses the printing-specific finish and price from `printingData` when available, otherwise the entry-level finish, across the mainboard plus commanders and signature spells. Basic lands are excluded.
+
+**Card-level history uses Moxfield API data only.** Each successful scrape saves the card name, printing finish, quantity, and per-vendor prices to `card_prices`; the dashboard's Card Prices button shows the latest list and its change since the previous card snapshot. No Scryfall lookup or page scraping is used.
 
 **A deck that fails is recorded under `missing`, not as `$0.00`.** Writing a zero would make a broken scrape indistinguishable from a worthless deck. Failures appear in the console and in the snapshot; that deck simply has no point for that run.
 

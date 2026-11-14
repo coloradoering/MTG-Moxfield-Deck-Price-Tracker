@@ -7,19 +7,20 @@
  *   node run.js --vendor tcgplayer   # which storefront to price against
  *   node run.js --all-formats        # include non-commander decks
  *
- * Requires an already-running Chrome with remote debugging, logged into
- * Moxfield. Set CHROME_URL if it is not on localhost:9222. See README for why:
- * the API sits behind Cloudflare and rejects non-browser TLS fingerprints.
+ * Starts Chrome with remote debugging if needed, then connects to Moxfield.
+ * Set CHROME_URL if it is not on localhost:9222. See README for why the API
+ * requests must run inside a real browser.
  */
 
 const puppeteer = require('puppeteer');
 const { MongoClient } = require('mongodb');
 const api = require('./moxfield-api');
 const registry = require('./deck-registry');
+const chrome = require('./chrome');
 
 const MONGO_URL = process.env.MONGO_URL || 'mongodb://localhost:27017';
 const DB_NAME = process.env.DB_NAME || 'moxfield_tracker';
-const CHROME_URL = process.env.CHROME_URL || 'http://localhost:9222';
+const CHROME_URL = chrome.CHROME_URL;
 
 function parseArgs(argv) {
   const opts = {
@@ -61,6 +62,15 @@ function localTimestamp(d = new Date()) {
     vendor = api.resolveVendor(opts.vendor);
   } catch (err) {
     console.error(err.message);
+    process.exit(1);
+  }
+
+  console.log(`Checking Chrome at ${CHROME_URL}...`);
+  try {
+    const status = await chrome.ensureChrome(CHROME_URL);
+    console.log(status.started ? 'Chrome launched.' : `Reusing ${status.browser}.`);
+  } catch (err) {
+    console.error(`Chrome startup failed: ${err.message}`);
     process.exit(1);
   }
 
@@ -150,6 +160,11 @@ function localTimestamp(d = new Date()) {
     vendors: {},
     missing: {},
   };
+  const cardRunData = {
+    date: runData.date,
+    user: opts.user,
+    decks: {},
+  };
 
   for (const d of selected) {
     try {
@@ -161,6 +176,7 @@ function localTimestamp(d = new Date()) {
       const values = api.allVendorValues(deck);
       runData.vendors[d.name] = values;
       runData.prices[d.name] = values[vendor];
+      cardRunData.decks[d.name] = api.cardPriceBreakdown(deck);
 
       runData.deckIds[d.name] = d.publicId;
       runData.formats[d.name] = d.format;
@@ -206,6 +222,13 @@ function localTimestamp(d = new Date()) {
 
     const result = await db.collection('price_logs').insertOne(runData);
     console.log(`Saved as ${result.insertedId}.`);
+
+    const cardCount = Object.values(cardRunData.decks)
+      .reduce((sum, cards) => sum + Object.keys(cards).length, 0);
+    if (cardCount > 0) {
+      await db.collection('card_prices').insertOne(cardRunData);
+      console.log(`Saved card prices for ${cardCount} cards.`);
+    }
   } catch (err) {
     console.error(`MongoDB write failed: ${err.message}`);
     process.exitCode = 1;
