@@ -549,6 +549,12 @@
                 if (deckSource === 'price_logs') {
                     note += ' · deck list from last snapshot (run the scraper to build the registry)';
                 }
+                const legacyCount = allHistory.filter(
+                    (snapshot) => Object.keys(snapshot.prices || {}).length === 0
+                ).length;
+                if (vendor !== 'cardkingdom' && legacyCount > 0) {
+                    note += ` · ${legacyCount} legacy snapshots use Card Kingdom pricing; select Card Kingdom to view`;
+                }
                 document.getElementById('lastUpdated').textContent = note;
 
                 renderStats(latest, previous);

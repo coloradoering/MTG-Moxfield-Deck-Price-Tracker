@@ -71,6 +71,20 @@ async function currentUser(db) {
   return pref?.moxfieldUser || DEFAULT_USER || null;
 }
 
+async function historyFilterForUser(db, user) {
+  if (!user) return {};
+
+  // Pre-user snapshots belong to the first account recorded in this database.
+  const firstTagged = await db.collection('price_logs').findOne(
+    { user: { $exists: true, $ne: null } },
+    { projection: { user: 1 }, sort: { date: 1 } }
+  );
+  if (!firstTagged || firstTagged.user === user) {
+    return { $or: [{ user }, { user: { $exists: false } }] };
+  }
+  return { user };
+}
+
 // ---------------------------------------------------------------- tracking user
 
 app.get('/api/user', async (req, res) => {
@@ -180,13 +194,10 @@ app.get('/api/history', async (req, res) => {
     // Snapshots are per-user. Without this filter every tracked user's history is
     // merged into one chart, and decks owned by two people blend into a single line.
     const tracked = req.query.user || (await withDb(currentUser));
-    const history = await withDb((db) =>
-      db
-        .collection('price_logs')
-        .find(tracked ? { user: tracked } : {})
-        .sort({ date: 1 })
-        .toArray()
-    );
+    const history = await withDb(async (db) => {
+      const filter = await historyFilterForUser(db, tracked);
+      return db.collection('price_logs').find(filter).sort({ date: 1 }).toArray();
+    });
     res.json(
       history.map((snap) => ({
         date: snap.date,
@@ -205,9 +216,10 @@ app.get('/api/latest', async (req, res) => {
   try {
     const vendor = api.resolveVendor(req.query.vendor);
     const tracked = req.query.user || (await withDb(currentUser));
-    const latest = await withDb((db) =>
-      db.collection('price_logs').findOne(tracked ? { user: tracked } : {}, { sort: { date: -1 } })
-    );
+    const latest = await withDb(async (db) => {
+      const filter = await historyFilterForUser(db, tracked);
+      return db.collection('price_logs').findOne(filter, { sort: { date: -1 } });
+    });
     if (!latest) return res.json(null);
     res.json({
       date: latest.date,
@@ -243,9 +255,8 @@ app.get('/api/decks', async (req, res) => {
       for (const u of users) {
         all.push(...(await registry.listDecks(db, u)));
       }
-      const snap = await db
-        .collection('price_logs')
-        .findOne(tracked ? { user: tracked } : {}, { sort: { date: -1 } });
+      const filter = await historyFilterForUser(db, tracked);
+      const snap = await db.collection('price_logs').findOne(filter, { sort: { date: -1 } });
 
       // The registry is populated by the scraper. If someone upgrades the code
       // without re-scraping it is empty, and the dashboard would show nothing at
@@ -292,9 +303,7 @@ app.get('/api/card-history/:deckName', async (req, res) => {
     const vendor = api.resolveVendor(req.query.vendor);
     const history = await withDb(async (db) => {
       const user = req.query.user || (await currentUser(db));
-      const filter = user
-        ? { $or: [{ user }, { user: { $exists: false } }] }
-        : {};
+      const filter = await historyFilterForUser(db, user);
       const snapshots = await db
         .collection('card_prices')
         .find(filter)
