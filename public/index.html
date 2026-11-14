@@ -550,10 +550,10 @@
                     note += ' · deck list from last snapshot (run the scraper to build the registry)';
                 }
                 const legacyCount = allHistory.filter(
-                    (snapshot) => Object.keys(snapshot.prices || {}).length === 0
+                    (snapshot) => snapshot.legacyPriceAttribution === 'tcgplayer'
                 ).length;
-                if (vendor !== 'cardkingdom' && legacyCount > 0) {
-                    note += ` · ${legacyCount} legacy snapshots use Card Kingdom pricing; select Card Kingdom to view`;
+                if (legacyCount > 0) {
+                    note += ` · ${legacyCount} legacy snapshots are displayed as TCGplayer; original pricing source may differ`;
                 }
                 document.getElementById('lastUpdated').textContent = note;
 

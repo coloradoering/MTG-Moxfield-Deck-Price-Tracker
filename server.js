@@ -36,15 +36,14 @@ async function withDb(fn) {
   }
 }
 
-/** Snapshots may predate the `vendor` field; those were scraped as Card Kingdom. */
-const LEGACY_VENDOR = 'cardkingdom';
+/** Untagged legacy prices are displayed as TCGplayer for chart continuity. */
+const LEGACY_VENDOR = 'tcgplayer';
 
 /**
  * Reduce a snapshot to one vendor's totals.
  *
  * Newer snapshots carry a `vendors` map with every storefront's total. Older
- * ones only have `prices`, taken from the deck page's displayed total, which was
- * whatever storefront the browser had selected — in practice Card Kingdom.
+ * ones only have `prices` and no reliable vendor label.
  */
 function pricesForVendor(snapshot, vendor) {
   if (snapshot.vendors) {
@@ -203,6 +202,7 @@ app.get('/api/history', async (req, res) => {
         date: snap.date,
         user: snap.user,
         vendor,
+        legacyPriceAttribution: !snap.vendors && !snap.vendor ? LEGACY_VENDOR : null,
         prices: pricesForVendor(snap, vendor),
         images: snap.images || {},
       }))
@@ -225,6 +225,8 @@ app.get('/api/latest', async (req, res) => {
       date: latest.date,
       user: latest.user,
       vendor,
+      legacyPriceAttribution:
+        !latest.vendors && !latest.vendor ? LEGACY_VENDOR : null,
       prices: pricesForVendor(latest, vendor),
       images: latest.images || {},
     });
